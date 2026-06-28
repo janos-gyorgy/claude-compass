@@ -1,0 +1,53 @@
+# claude-compass — your personal principle-guard for Claude Code.
+#
+# EVERY RULE SHIPS OFF. A fresh install changes nothing. Flip `enabled = true`
+# on a group to turn it on. Per group, `action` decides what a hit does:
+#     action = "block"  -> deny the tool call / push back on Stop (hard)
+#     action = "warn"   -> surface a message to YOU, let it proceed (soft)
+#
+# Tiered defaults below match the recommended posture: BLOCK the dangerous
+# stuff, WARN on the stylistic stuff. Change freely — you're at the root.
+#
+# Nothing here calls an LLM or the network. 100% local, deterministic.
+
+
+# ── PreToolUse: stop dangerous actions before they run ──────────────────────
+[dangerous_tools]
+enabled = false
+action  = "block"
+rm_rf              = true     # rm -rf / -fr / --force / --recursive
+disk_destroyers    = true     # dd of=/dev/…, mkfs, > /dev/sd*
+curl_pipe_shell    = true     # curl|sh, wget|bash
+chmod_777          = true     # chmod 777 / -R 777
+secret_file_edits  = true     # Edit/Write to the secret globs below
+secret_path_globs  = ["*.env", ".env*", "*.pem", "id_rsa*", "id_ed25519*", "**/secrets/**", "*.kube/config", "credentials"]
+extra_command_patterns = []   # your own regexes, matched against any Bash command
+
+
+# ── PreToolUse: git safety rails ────────────────────────────────────────────
+[git_safety]
+enabled = false
+action  = "block"
+push_to_protected  = true
+protected_branches = ["main", "master"]
+force_push         = true     # --force / --force-with-lease / -f
+
+
+# ── Stop: flag the model sucking up (the "prompt begging" you named) ─────────
+[sycophancy]
+enabled = false
+action  = "warn"
+flag_superlative_pileups = true
+superlative_threshold    = 3      # this many superlatives in one message → flag
+flag_gushing_closers     = true   # "happy to help!", "you've got this", …
+# phrases = [...]  # uncomment to OVERRIDE the built-in flattery phrase list
+
+
+# ── Stop: flag unrequested scope expansion ──────────────────────────────────
+# NOTE: deterministic PROXY only — it catches "while I was at it / took the
+# liberty / also refactored" language, not true intent-drift. The real
+# drift-detector needs the optional LLM judge (not in this local build).
+[scope_drift]
+enabled = false
+action  = "warn"
+# expansion_phrases = [...]  # uncomment to override the built-in list

@@ -1,0 +1,34 @@
+# Example: a sensible "armed" config. Copy over compass.toml (or point
+# COMPASS_CONFIG at it) once you've decided what you want enforced.
+#
+# This turns ON the hard safety rails (block) and the sycophancy warner (warn),
+# and leaves the experimental scope-drift proxy off.
+
+[dangerous_tools]
+enabled = true
+action  = "block"
+rm_rf             = true
+disk_destroyers   = true
+curl_pipe_shell   = true
+chmod_777         = true
+secret_file_edits = true
+secret_path_globs = ["*.env", ".env*", "*.pem", "id_rsa*", "**/secrets/**"]
+extra_command_patterns = ["\\bgit\\s+reset\\s+--hard\\b"]   # example: guard hard resets too
+
+[git_safety]
+enabled = true
+action  = "block"
+push_to_protected  = true
+protected_branches = ["main", "master", "production"]
+force_push         = true
+
+[sycophancy]
+enabled = true
+action  = "warn"
+flag_superlative_pileups = true
+superlative_threshold    = 3
+flag_gushing_closers     = true
+
+[scope_drift]
+enabled = false
+action  = "warn"

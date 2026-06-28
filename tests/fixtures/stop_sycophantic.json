@@ -1,0 +1,5 @@
+{
+  "session_id": "demo",
+  "hook_event_name": "Stop",
+  "transcript_path": "tests/fixtures/transcript_sycophantic.jsonl"
+}

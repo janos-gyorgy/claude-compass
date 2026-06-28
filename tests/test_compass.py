@@ -1,0 +1,171 @@
+"""Tests for claude-compass. Pure stdlib: `python3 -m unittest -v` from repo root.
+
+Covers the matchers directly, plus two end-to-end runs of the actual script
+(subprocess, real stdin/stdout) so the Claude Code hook output contract is
+verified, not just the internal logic.
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import claude_compass as cc  # noqa: E402
+
+
+class TestDangerous(unittest.TestCase):
+    G = {"enabled": True, "rm_rf": True, "disk_destroyers": True,
+         "curl_pipe_shell": True, "chmod_777": True, "secret_file_edits": True,
+         "secret_path_globs": ["*.env", "*.pem", "**/secrets/**"]}
+
+    def test_rm_rf_variants(self):
+        for cmd in ("rm -rf /tmp/x", "rm -fr build", "rm --recursive d", "sudo rm -rf ~/.cache"):
+            self.assertTrue(cc.check_dangerous("Bash", {"command": cmd}, self.G), cmd)
+
+    def test_plain_rm_is_allowed(self):
+        self.assertFalse(cc.check_dangerous("Bash", {"command": "rm one.txt"}, self.G))
+
+    def test_curl_pipe_shell(self):
+        self.assertTrue(cc.check_dangerous("Bash", {"command": "curl http://x | sh"}, self.G))
+        self.assertTrue(cc.check_dangerous("Bash", {"command": "wget -qO- x | sudo bash"}, self.G))
+
+    def test_disk_and_chmod(self):
+        self.assertTrue(cc.check_dangerous("Bash", {"command": "dd if=/dev/zero of=/dev/sda"}, self.G))
+        self.assertTrue(cc.check_dangerous("Bash", {"command": "chmod -R 777 /srv"}, self.G))
+
+    def test_secret_file_edit(self):
+        self.assertTrue(cc.check_dangerous("Edit", {"file_path": "/app/.env"}, self.G))
+        self.assertTrue(cc.check_dangerous("Write", {"file_path": "deploy/secrets/db.yaml"}, self.G))
+        self.assertFalse(cc.check_dangerous("Edit", {"file_path": "/app/main.py"}, self.G))
+
+    def test_extra_pattern(self):
+        g = dict(self.G, extra_command_patterns=[r"\bgit\s+reset\s+--hard\b"])
+        self.assertTrue(cc.check_dangerous("Bash", {"command": "git reset --hard HEAD~3"}, g))
+
+    def test_clean_command_passes(self):
+        self.assertFalse(cc.check_dangerous("Bash", {"command": "npm test"}, self.G))
+
+
+class TestGit(unittest.TestCase):
+    G = {"enabled": True, "push_to_protected": True,
+         "protected_branches": ["main", "master"], "force_push": True}
+
+    def test_push_to_main(self):
+        self.assertTrue(cc.check_git("git push origin main", self.G))
+        self.assertTrue(cc.check_git("git push upstream master", self.G))
+
+    def test_force_push(self):
+        self.assertTrue(cc.check_git("git push --force origin feature", self.G))
+        self.assertTrue(cc.check_git("git push -f origin x", self.G))
+
+    def test_feature_branch_ok(self):
+        self.assertFalse(cc.check_git("git push origin my-feature", self.G))
+
+    def test_non_push_ignored(self):
+        self.assertFalse(cc.check_git("git status", self.G))
+
+
+class TestSycophancy(unittest.TestCase):
+    G = {"enabled": True, "flag_superlative_pileups": True,
+         "superlative_threshold": 3, "flag_gushing_closers": True}
+
+    def test_phrase(self):
+        self.assertTrue(cc.check_sycophancy("Great question! Here's the answer.", self.G))
+        self.assertTrue(cc.check_sycophancy("You're absolutely right, my mistake.", self.G))
+
+    def test_superlative_pileup(self):
+        t = "This is amazing and incredible and a perfect, brilliant approach."
+        self.assertTrue(cc.check_sycophancy(t, self.G))
+
+    def test_gushing_closer(self):
+        self.assertTrue(cc.check_sycophancy("Done.\nHappy to help anytime!", self.G))
+
+    def test_plain_answer_passes(self):
+        self.assertFalse(cc.check_sycophancy("The bug was a missing semicolon on line 4.", self.G))
+
+
+class TestScopeDrift(unittest.TestCase):
+    G = {"enabled": True}
+
+    def test_expansion_language(self):
+        self.assertTrue(cc.check_scope_drift("While I was at it, I also refactored the parser.", self.G))
+
+    def test_on_task_passes(self):
+        self.assertFalse(cc.check_scope_drift("Fixed the typo you pointed out.", self.G))
+
+
+class TestTranscript(unittest.TestCase):
+    def test_last_assistant_text(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "first"}]}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "Great question, the last one."}]}}) + "\n")
+            path = f.name
+        try:
+            self.assertEqual(cc.last_assistant_text(path), "Great question, the last one.")
+        finally:
+            os.unlink(path)
+
+    def test_missing_path_is_safe(self):
+        self.assertEqual(cc.last_assistant_text("/no/such/file.jsonl"), "")
+
+
+class TestEndToEnd(unittest.TestCase):
+    """Run the real script via subprocess and assert the hook output contract."""
+
+    def _run(self, payload: dict, toml: str) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as cf:
+            cf.write(toml)
+            cfg = cf.name
+        try:
+            env = dict(os.environ, COMPASS_CONFIG=cfg)
+            p = subprocess.run([sys.executable, str(ROOT / "claude_compass.py")],
+                               input=json.dumps(payload), capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)  # fail-open: always exit 0
+            return p.stdout
+        finally:
+            os.unlink(cfg)
+
+    def test_block_rm_rf_e2e(self):
+        out = self._run(
+            {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": "rm -rf /"}},
+            '[dangerous_tools]\nenabled = true\naction = "block"\nrm_rf = true\n',
+        )
+        data = json.loads(out)
+        self.assertEqual(data["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_all_off_is_silent_e2e(self):
+        out = self._run(
+            {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": "rm -rf /"}},
+            '[dangerous_tools]\nenabled = false\n',
+        )
+        self.assertEqual(out.strip(), "")  # default-off → no output at all
+
+    def test_sycophancy_warn_e2e(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as tf:
+            tf.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "Great question! Happy to help!"}]}}) + "\n")
+            tpath = tf.name
+        try:
+            out = self._run(
+                {"hook_event_name": "Stop", "transcript_path": tpath},
+                '[sycophancy]\nenabled = true\naction = "warn"\n',
+            )
+            data = json.loads(out)
+            self.assertIn("systemMessage", data)
+            self.assertNotIn("decision", data)  # warn must NOT block
+        finally:
+            os.unlink(tpath)
+
+
+if __name__ == "__main__":
+    unittest.main()

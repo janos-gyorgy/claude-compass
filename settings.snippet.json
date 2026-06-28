@@ -1,0 +1,20 @@
+{
+  "_comment": "Manual wiring if you'd rather not run install.py. Replace ABSOLUTE_PATH with this repo's location, then merge this 'hooks' block into ~/.claude/settings.json (or ./.claude/settings.json).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 \"ABSOLUTE_PATH/claude_compass.py\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"ABSOLUTE_PATH/claude_compass.py\"" }
+        ]
+      }
+    ]
+  }
+}
