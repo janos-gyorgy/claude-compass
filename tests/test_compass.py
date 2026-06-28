@@ -99,6 +99,52 @@ class TestScopeDrift(unittest.TestCase):
         self.assertFalse(cc.check_scope_drift("Fixed the typo you pointed out.", self.G))
 
 
+class TestSelfReport(unittest.TestCase):
+    G = {"enabled": True, "markers": ["drift", "scope", "unsure", "assume", "flattery", "risk"],
+         "block_markers": ["risk"]}
+
+    def test_marker_detected(self):
+        reason, escalate = cc.check_self_report("Doing the thing. <<compass:drift>>", self.G)
+        self.assertIn("going beyond", reason)
+        self.assertFalse(escalate)
+
+    def test_marker_case_and_spacing(self):
+        reason, _ = cc.check_self_report("<< COMPASS : Unsure >>", self.G)
+        self.assertTrue(reason)
+
+    def test_risk_escalates_to_block(self):
+        reason, escalate = cc.check_self_report("about to <<compass:risk>>", self.G)
+        self.assertTrue(escalate)
+
+    def test_disabled_marker_ignored(self):
+        g = {"enabled": True, "markers": ["drift"]}  # 'scope' not enabled
+        reason, _ = cc.check_self_report("<<compass:scope>>", g)
+        self.assertEqual(reason, "")
+
+    def test_no_marker(self):
+        reason, escalate = cc.check_self_report("a perfectly normal answer", self.G)
+        self.assertEqual(reason, "")
+        self.assertFalse(escalate)
+
+    def test_since_last_user_picks_whole_turn(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps({"type": "user", "message": {"role": "user", "content": "old"}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "irrelevant old turn"}]}}) + "\n")
+            f.write(json.dumps({"type": "user", "message": {"role": "user", "content": "new task"}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "mid step <<compass:scope>>"}]}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "clean final summary"}]}}) + "\n")
+            path = f.name
+        try:
+            turn = cc.assistant_text_since_last_user(path)
+            self.assertIn("<<compass:scope>>", turn)      # caught mid-turn
+            self.assertNotIn("irrelevant old turn", turn)  # previous turn excluded
+        finally:
+            os.unlink(path)
+
+
 class TestTranscript(unittest.TestCase):
     def test_last_assistant_text(self):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
@@ -163,6 +209,22 @@ class TestEndToEnd(unittest.TestCase):
             data = json.loads(out)
             self.assertIn("systemMessage", data)
             self.assertNotIn("decision", data)  # warn must NOT block
+        finally:
+            os.unlink(tpath)
+
+    def test_self_report_risk_blocks_e2e(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as tf:
+            tf.write(json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n")
+            tf.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "deleting prod db <<compass:risk>>"}]}}) + "\n")
+            tpath = tf.name
+        try:
+            out = self._run(
+                {"hook_event_name": "Stop", "transcript_path": tpath},
+                '[self_report]\nenabled = true\naction = "warn"\nblock_markers = ["risk"]\n',
+            )
+            data = json.loads(out)
+            self.assertEqual(data.get("decision"), "block")  # risk escalated past warn
         finally:
             os.unlink(tpath)
 

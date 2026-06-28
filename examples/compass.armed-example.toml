@@ -32,3 +32,10 @@ flag_gushing_closers     = true
 [scope_drift]
 enabled = false
 action  = "warn"
+
+# Requires pasting CLAUDE.snippet.md into your CLAUDE.md to do anything.
+[self_report]
+enabled = true
+action  = "warn"
+markers = ["drift", "scope", "unsure", "assume", "flattery", "risk"]
+block_markers = ["risk"]

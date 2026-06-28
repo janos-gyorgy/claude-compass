@@ -46,8 +46,21 @@ flag_gushing_closers     = true   # "happy to help!", "you've got this", …
 # ── Stop: flag unrequested scope expansion ──────────────────────────────────
 # NOTE: deterministic PROXY only — it catches "while I was at it / took the
 # liberty / also refactored" language, not true intent-drift. The real
-# drift-detector needs the optional LLM judge (not in this local build).
+# drift-detector needs either an LLM judge OR the self_report half below.
 [scope_drift]
 enabled = false
 action  = "warn"
 # expansion_phrases = [...]  # uncomment to override the built-in list
+
+
+# ── Stop: the OTHER best-effort — the model self-flags ──────────────────────
+# Pair this with CLAUDE.snippet.md (paste it into your CLAUDE.md): the model is
+# asked to emit <<compass:CODE>> when it catches itself doing one of these. The
+# hook greps for the token — still 100% local, but the judgment is the running
+# model's, so it can catch true intent-drift that patterns can't.
+# Honest limit: only as reliable as the model's willingness to self-flag.
+[self_report]
+enabled = false
+action  = "warn"
+markers = ["drift", "scope", "unsure", "assume", "flattery", "risk"]
+block_markers = ["risk"]   # these escalate to a hard block even when action="warn"

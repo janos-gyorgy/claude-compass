@@ -39,6 +39,7 @@ you edit [`compass.toml`](compass.toml) and flip `enabled = true`.
 | `git_safety` | PreToolUse | **block** | `git push` to `main`/`master`, `--force` / `-f` pushes |
 | `sycophancy` | Stop | **warn** | flattery phrases, superlative pile-ups, gushing closers — the "prompt begging" |
 | `scope_drift` | Stop | **warn** | unrequested scope-expansion language ("while I was at it… I also refactored") |
+| `self_report` | Stop | **warn** | markers the model emits *about itself* — `<<compass:drift\|scope\|unsure\|assume\|flattery\|risk>>` (see below) |
 
 `action` is per group: `"block"` (hard deny / push-back) or `"warn"` (surfaced to
 you, action proceeds). The shipped defaults are **tiered** — block the dangerous,
@@ -65,6 +66,33 @@ $EDITOR compass.toml        # flip enabled = true on the groups you want
 
 There's a ready-made armed config in [`examples/`](examples/compass.armed-example.toml).
 Point at any config with `COMPASS_CONFIG=/path/to/your.toml`.
+
+## The double-sided idea (`self_report`)
+
+Pattern-matching has a ceiling: it catches *language*, not *meaning*. So the
+`self_report` group adds a second, independent best-effort — **the model flags
+itself**. You paste [`CLAUDE.snippet.md`](CLAUDE.snippet.md) into your
+`CLAUDE.md`, which asks the session to emit a marker when it catches itself
+drifting, guessing, assuming, sucking up, or about to do something risky:
+
+```
+Renamed the function. While I was here I also restructured the module
+<<compass:scope>> and I haven't re-run the tests <<compass:unsure>>
+```
+
+The hook greps for `<<compass:CODE>>` on Stop and warns (or, for codes in
+`block_markers`, hard-blocks). Still **100% local and deterministic on the hook
+side** — the judgment comes from the model that's *already running*, so you get
+near-"LLM-judge" coverage with no extra cost and nothing leaving the machine.
+
+The two sides fail differently, which is the whole point: patterns catch a model
+that won't admit a problem; self-report catches semantic problems no regex can
+see. **Honest caveat:** self-report is only as reliable as the model's
+willingness/ability to flag itself — weakest exactly when you'd most want it. Use
+it as an *additive* best-effort, not a guarantee.
+
+To use it: enable `[self_report]` in `compass.toml` **and** add the snippet to
+your `CLAUDE.md`. One without the other does nothing.
 
 ## How it works
 

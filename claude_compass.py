@@ -213,6 +213,45 @@ def check_scope_drift(text: str, g: dict) -> str:
     return ""
 
 
+# Self-report: the OTHER best-effort side. The model is asked (via CLAUDE.snippet.md)
+# to emit `<<compass:CODE>>` when it catches itself drifting / guessing / etc.
+# The hook just greps for the token — still 100% local & deterministic, but the
+# judgment is the running model's. Honest limit: only as reliable as the model's
+# willingness/ability to self-flag (weakest exactly when you'd most want it).
+_MARKER = re.compile(r"<<\s*compass\s*:\s*(\w+)\s*>>", re.I)
+_MARKER_MEANING = {
+    "drift": "self-flagged: going beyond / away from what was asked",
+    "scope": "self-flagged: adding unrequested scope",
+    "unsure": "self-flagged: guessing / low confidence / unverified",
+    "assume": "self-flagged: proceeding on an unconfirmed assumption",
+    "flattery": "self-flagged: being sycophantic",
+    "risk": "self-flagged: risky / hard-to-reverse action",
+}
+_DEFAULT_MARKERS = list(_MARKER_MEANING)
+
+
+def check_self_report(text: str, g: dict):
+    """Return (reason, escalate_to_block) for any enabled self-report markers."""
+    enabled = [m.lower() for m in (g.get("markers") or _DEFAULT_MARKERS)]
+    block_markers = {m.lower() for m in (g.get("block_markers") or [])}
+    hits, escalate = [], False
+    for code in _MARKER.findall(text):
+        code = code.lower()
+        if code in enabled:
+            hits.append(_MARKER_MEANING.get(code, f"self-flagged: {code}"))
+            if code in block_markers:
+                escalate = True
+    if hits:
+        # de-dupe, keep order
+        seen, uniq = set(), []
+        for h in hits:
+            if h not in seen:
+                seen.add(h)
+                uniq.append(h)
+        return " | ".join(uniq[:4]), escalate
+    return "", False
+
+
 # --------------------------------------------------------------------------- #
 # transcript reading (for Stop)
 # --------------------------------------------------------------------------- #
@@ -258,6 +297,38 @@ def last_assistant_text(transcript_path: str) -> str:
     return last
 
 
+def assistant_text_since_last_user(transcript_path: str) -> str:
+    """All assistant text in the final turn (reset on each user message). Used for
+    self-report markers, which may be emitted mid-turn, not just in the last reply."""
+    if not transcript_path:
+        return ""
+    p = Path(transcript_path)
+    if not p.exists():
+        return ""
+    buf: list[str] = []
+    try:
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+                role = msg.get("role") or obj.get("type")
+                if role == "user":
+                    buf = []  # new turn
+                elif role == "assistant":
+                    txt = _block_text(msg.get("content"))
+                    if txt.strip():
+                        buf.append(txt)
+    except Exception:
+        return ""
+    return "\n".join(buf)
+
+
 # --------------------------------------------------------------------------- #
 # event handlers
 # --------------------------------------------------------------------------- #
@@ -281,9 +352,22 @@ def handle_pretool(ev: dict, cfg: dict) -> None:
 def handle_stop(ev: dict, cfg: dict) -> None:
     syc = cfg.get("sycophancy", {})
     drift = cfg.get("scope_drift", {})
-    if not (syc.get("enabled") or drift.get("enabled")):
+    selfrep = cfg.get("self_report", {})
+    if not (syc.get("enabled") or drift.get("enabled") or selfrep.get("enabled")):
         return
-    text = last_assistant_text(ev.get("transcript_path", ""))
+    path = ev.get("transcript_path", "")
+
+    # Self-report scans the whole final turn (markers may be emitted mid-turn).
+    if selfrep.get("enabled"):
+        turn = assistant_text_since_last_user(path)
+        if turn:
+            reason, escalate = check_self_report(turn, selfrep)
+            if reason:
+                action = "block" if escalate else selfrep.get("action", "warn")
+                return act(action, reason, on="stop")
+
+    # Pattern checks look at the final reply.
+    text = last_assistant_text(path)
     if not text:
         return
     if syc.get("enabled"):
