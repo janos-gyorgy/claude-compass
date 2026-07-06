@@ -132,7 +132,7 @@ the enabled rules, and emits the Claude Code hook output contract:
 python3 -m unittest discover -s tests -v
 ```
 
-22 tests: every matcher, transcript parsing, and three end-to-end subprocess runs
+29 tests: every matcher, transcript parsing, and end-to-end subprocess runs
 that assert the real hook output contract.
 
 ## License
