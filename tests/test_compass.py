@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -227,6 +228,92 @@ class TestEndToEnd(unittest.TestCase):
             self.assertEqual(data.get("decision"), "block")  # risk escalated past warn
         finally:
             os.unlink(tpath)
+
+
+class TestFinalTurnLag(unittest.TestCase):
+    """Regression for the transcript one-message lag: Claude Code fires Stop
+    before the just-finished turn is flushed, so a single read is stale. The
+    hook must poll until the current turn lands, then scan it."""
+
+    @staticmethod
+    def _line(role, text):
+        return json.dumps({"type": role, "message": {"role": role,
+                "content": [{"type": "text", "text": text}] if role == "assistant" else text}}) + "\n"
+
+    def test_final_turn_present_semantics(self):
+        # ends on a user message -> current assistant turn has NOT landed yet
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(self._line("user", "go"))
+            waiting = f.name
+        # ends on assistant text -> turn has landed
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(self._line("user", "go"))
+            f.write(self._line("assistant", "here is the answer"))
+            landed = f.name
+        # ends on an assistant message with no text (tool-only) -> not landed
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(self._line("user", "go"))
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}) + "\n")
+            tool_only = f.name
+        try:
+            self.assertFalse(cc._final_turn_present(waiting))
+            self.assertTrue(cc._final_turn_present(landed))
+            self.assertFalse(cc._final_turn_present(tool_only))
+            self.assertFalse(cc._final_turn_present("/no/such/file.jsonl"))
+        finally:
+            for p in (waiting, landed, tool_only):
+                os.unlink(p)
+
+    def _run_stop_with_delayed_turn(self, initial_lines, delayed_line, toml, delay=0.04):
+        """Write initial_lines, run the real script on a Stop event, and append
+        delayed_line mid-run to mimic CC flushing the final turn late."""
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as tf:
+            tf.writelines(initial_lines)
+            tpath = tf.name
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as cf:
+            cf.write(toml)
+            cfg = cf.name
+
+        def _append():
+            with open(tpath, "a") as fh:
+                fh.write(delayed_line)
+        timer = threading.Timer(delay, _append)
+        try:
+            timer.start()
+            env = dict(os.environ, COMPASS_CONFIG=cfg, COMPASS_LOG=os.devnull)
+            p = subprocess.run([sys.executable, str(ROOT / "claude_compass.py")],
+                               input=json.dumps({"hook_event_name": "Stop", "transcript_path": tpath}),
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            return p.stdout
+        finally:
+            timer.cancel()
+            os.unlink(tpath)
+            os.unlink(cfg)
+
+    def test_late_marker_is_still_caught(self):
+        # transcript has only the user turn when Stop fires; the risky final turn
+        # lands 40ms later. The poll-read must wait for it and block.
+        out = self._run_stop_with_delayed_turn(
+            [self._line("user", "go run it")],
+            self._line("assistant", "removing prod <<compass:risk>>"),
+            '[self_report]\nenabled = true\naction = "warn"\nblock_markers = ["risk"]\n',
+        )
+        self.assertEqual(json.loads(out).get("decision"), "block")
+
+    def test_no_misattribution_across_lag(self):
+        # a PREVIOUS turn was flattery; the current turn (still unflushed at Stop)
+        # is clean. Must wait for the clean turn and stay silent, not warn on the
+        # stale flattery turn.
+        out = self._run_stop_with_delayed_turn(
+            [self._line("user", "q1"),
+             self._line("assistant", "You're absolutely right, great question!"),
+             self._line("user", "q2")],
+            self._line("assistant", "The value is 42; nothing else changed."),
+            '[sycophancy]\nenabled = true\naction = "warn"\n',
+        )
+        self.assertEqual(out.strip(), "")  # clean current turn -> no warn
 
 
 if __name__ == "__main__":
