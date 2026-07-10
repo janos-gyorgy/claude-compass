@@ -1,0 +1,142 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { Entry, parseLine } from "./parse.js";
+import { tailFile } from "./tail.js";
+
+type Filter = "all" | "block" | "warn";
+
+const GROUP_ORDER = [
+  "dangerous_tools",
+  "git_safety",
+  "sycophancy",
+  "scope_drift",
+  "self_report",
+  "other",
+];
+
+function shortTs(iso: string): string {
+  const t = iso.indexOf("T");
+  return t >= 0 ? iso.slice(t + 1) : iso;
+}
+
+function Row({ e }: { e: Entry }) {
+  return (
+    <Box>
+      <Text dimColor>{shortTs(e.ts)} </Text>
+      <Text color={e.action === "BLOCK" ? "red" : "yellow"} bold>
+        {e.action.padEnd(5)}
+      </Text>
+      <Text color="cyan"> {e.on.padEnd(7)}</Text>
+      <Text dimColor> {e.group.padEnd(15)}</Text>
+      <Text> {e.reason}</Text>
+    </Box>
+  );
+}
+
+export function App({ logPath }: { logPath: string }) {
+  const { exit } = useApp();
+  const { isRawModeSupported } = useStdin();
+  const { stdout } = useStdout();
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [sinceLaunch, setSinceLaunch] = useState(0);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [scroll, setScroll] = useState(0); // 0 = pinned to newest
+
+  useEffect(() => {
+    const handle = tailFile(logPath, (lines, initial) => {
+      const parsed = lines
+        .map(parseLine)
+        .filter((e): e is Entry => e !== null);
+      if (!parsed.length) return;
+      setEntries((prev) => [...prev, ...parsed]);
+      if (!initial) setSinceLaunch((n) => n + parsed.length);
+    });
+    return () => handle.stop();
+  }, [logPath]);
+
+  useInput(
+    (input, key) => {
+      if (input === "q") exit();
+      else if (input === "b") setFilter("block");
+      else if (input === "w") setFilter("warn");
+      else if (input === "a") setFilter("all");
+      else if (key.upArrow) setScroll((s) => s + 1);
+      else if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
+    },
+    { isActive: isRawModeSupported },
+  );
+
+  const filtered = useMemo(
+    () =>
+      filter === "all"
+        ? entries
+        : entries.filter((e) => e.action === filter.toUpperCase()),
+    [entries, filter],
+  );
+
+  const counts = useMemo(() => {
+    const byGroup = new Map<string, number>();
+    let block = 0;
+    let warn = 0;
+    for (const e of entries) {
+      byGroup.set(e.group, (byGroup.get(e.group) ?? 0) + 1);
+      if (e.action === "BLOCK") block++;
+      else warn++;
+    }
+    return { byGroup, block, warn };
+  }, [entries]);
+
+  const rows = Math.max(5, (stdout?.rows ?? 24) - 7);
+  const maxScroll = Math.max(0, filtered.length - rows);
+  const clamped = Math.min(scroll, maxScroll);
+  const end = filtered.length - clamped;
+  const visible = filtered.slice(Math.max(0, end - rows), end);
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text bold color="cyan">
+          compass-tui
+        </Text>
+        <Text dimColor> — watching {logPath}</Text>
+      </Box>
+      <Box>
+        <Text color="red" bold>
+          BLOCK {counts.block}
+        </Text>
+        <Text> </Text>
+        <Text color="yellow" bold>
+          WARN {counts.warn}
+        </Text>
+        <Text dimColor> · since launch: {sinceLaunch}</Text>
+        <Text dimColor>
+          {" · "}
+          {GROUP_ORDER.filter((g) => counts.byGroup.has(g))
+            .map((g) => `${g} ${counts.byGroup.get(g)}`)
+            .join(" · ") || "no firings"}
+        </Text>
+      </Box>
+      <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+      {filtered.length === 0 ? (
+        <Box paddingY={1}>
+          <Text dimColor>
+            {entries.length === 0
+              ? "No firings logged — the guard hasn't caught anything. That's the normal, healthy case."
+              : `No ${filter.toUpperCase()} entries (filter active — press a for all).`}
+          </Text>
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          {visible.map((e, i) => (
+            <Row key={`${e.raw}-${i}`} e={e} />
+          ))}
+        </Box>
+      )}
+      <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+      <Text dimColor>
+        b blocks · w warns · a all · ↑/↓ scroll
+        {clamped > 0 ? ` (${clamped} back)` : ""} · filter: {filter} · q quit
+      </Text>
+    </Box>
+  );
+}

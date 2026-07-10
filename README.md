@@ -153,6 +153,21 @@ instead: `cd go && go build -o compass .` and point the hook command at it.
 The TS port builds with `cd ts && npm i && npm run build` to a single
 `dist/compass.mjs` (runs on bare `node`, parser bundled in).
 
+## compass-tui — watch the guard live
+
+The guard logs every firing to `~/.claude/compass-warns.log`; [`tui/`](tui/) is
+a small companion terminal monitor (TypeScript + [Ink](https://github.com/vadimdemedes/ink))
+so you don't have to `tail -f` it: blocks in red, warns in yellow, counts per
+rule group, live as they fire.
+
+```bash
+cd tui && npm install && npm run build && npm start
+```
+
+Strictly read-only and out of the hot path: the hook stays a zero-dependency
+single file; the TUI is a separate long-lived process that only reads the log.
+`b`/`w`/`a` filter, arrows scroll, `q` quits. Respects `$COMPASS_LOG`.
+
 ## Test
 
 ```bash
