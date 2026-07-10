@@ -172,7 +172,7 @@ class TestEndToEnd(unittest.TestCase):
             cf.write(toml)
             cfg = cf.name
         try:
-            env = dict(os.environ, COMPASS_CONFIG=cfg)
+            env = dict(os.environ, COMPASS_CONFIG=cfg, COMPASS_LOG=os.devnull)
             p = subprocess.run([sys.executable, str(ROOT / "claude_compass.py")],
                                input=json.dumps(payload), capture_output=True, text=True, env=env)
             self.assertEqual(p.returncode, 0, p.stderr)  # fail-open: always exit 0
