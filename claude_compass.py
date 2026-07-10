@@ -25,6 +25,8 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -82,8 +84,29 @@ def block_stop(reason: str) -> None:
     _emit({"decision": "block", "reason": f"compass: {reason}"})
 
 
+def _log(action: str, reason: str, on: str) -> None:
+    """Append every fired rule to a durable log so warns aren't invisible.
+
+    systemMessage (the warn channel) has no guaranteed rendering on a Stop hook,
+    so a `tail -f` on this file is the reliable way to see warns. Only called
+    when a rule actually fires — a fresh install with everything off never writes.
+    Fail-open: any error is swallowed so logging can never brick the guard.
+    """
+    try:
+        path = os.environ.get("COMPASS_LOG") or str(Path.home() / ".claude" / "compass-warns.log")
+        ts = datetime.now().isoformat(timespec="seconds")
+        line = f"[{ts}] {action.upper():5s} on={on}  {reason}\n"
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 def act(action: str, reason: str, *, on: str) -> None:
     """Apply a rule's configured action ('block' | 'warn')."""
+    _log(action, reason, on)
     if action == "warn":
         warn_user(reason)
     elif action == "block":
@@ -329,6 +352,50 @@ def assistant_text_since_last_user(transcript_path: str) -> str:
     return "\n".join(buf)
 
 
+def _final_turn_present(transcript_path: str) -> bool:
+    """True once the just-finished assistant turn has been flushed to the
+    transcript, i.e. the last text-bearing message is an assistant one.
+
+    Claude Code fires the Stop hook slightly *before* the final assistant turn is
+    written to the transcript file, so a single read sees a one-message-stale
+    file: end-of-turn self-report markers are missed and sycophancy is scored a
+    turn late. Poll until the current turn lands (see _await_final_turn)."""
+    p = Path(transcript_path)
+    if not p.exists():
+        return False
+    last = None
+    try:
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+                role = msg.get("role") or obj.get("type")
+                if role == "user":
+                    last = "user"
+                elif role == "assistant" and _block_text(msg.get("content")).strip():
+                    last = "assistant"
+    except Exception:
+        return False
+    return last == "assistant"
+
+
+def _await_final_turn(transcript_path: str, tries: int = 6, delay: float = 0.03) -> None:
+    """Give the transcript writer a moment to flush the turn that triggered Stop.
+    Fail-open: on timeout we just scan whatever is there (no worse than before)."""
+    if not transcript_path:
+        return
+    for _ in range(tries):
+        if _final_turn_present(transcript_path):
+            return
+        time.sleep(delay)
+
+
 # --------------------------------------------------------------------------- #
 # event handlers
 # --------------------------------------------------------------------------- #
@@ -356,6 +423,10 @@ def handle_stop(ev: dict, cfg: dict) -> None:
     if not (syc.get("enabled") or drift.get("enabled") or selfrep.get("enabled")):
         return
     path = ev.get("transcript_path", "")
+
+    # The Stop hook fires before the final turn is flushed; wait for it to land
+    # so end-of-turn markers aren't missed and sycophancy isn't scored a turn late.
+    _await_final_turn(path)
 
     # Self-report scans the whole final turn (markers may be emitted mid-turn).
     if selfrep.get("enabled"):
