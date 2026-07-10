@@ -126,14 +126,43 @@ the enabled rules, and emits the Claude Code hook output contract:
   `git push … main` and `--force`; it can't know your current branch, so
   "block any commit while on main" isn't in this version.
 
+## Three implementations, one contract
+
+The hook is also ported to **Go** ([`go/`](go/)) and **TypeScript** ([`ts/`](ts/)).
+Same stdin/stdout contract, same rules, same fail-open behavior — pinned by a
+shared conformance suite ([`tests/conformance/`](tests/conformance/)) that runs
+all three as real subprocesses over the same JSON vectors.
+
+Why bother? A hook spawns a fresh process on **every tool call**, so start-up
+cost is the honest number, and the languages are not close
+(Linux x86-64, 50 spawns/cell, all rule groups enabled):
+
+| scenario | python | go | node (ts) |
+|---|---|---|---|
+| **silent-pass** (every tool call pays this) | 35.8 ms (p95 39.0) | **1.9 ms** (p95 3.1) | 106.4 ms (p95 118.5) |
+| **deny** (rule fires) | 36.5 ms (p95 42.3) | **2.9 ms** (p95 4.0) | 107.6 ms (p95 119.1) |
+| **stop-scan** (60-msg transcript) | 37.0 ms (p95 39.5) | **4.0 ms** (p95 6.4) | 109.4 ms (p95 132.5) |
+
+The Go binary is ~19× faster than the Python original on the path that runs
+constantly — and Node is ~3× *slower* than Python (V8 start-up dwarfs the actual
+work). Reproduce with `python3 bench/bench.py`.
+
+The Python file stays the reference implementation and the default install —
+zero dependencies beats 34 ms for most sessions. If you want the Go binary
+instead: `cd go && go build -o compass .` and point the hook command at it.
+The TS port builds with `cd ts && npm i && npm run build` to a single
+`dist/compass.mjs` (runs on bare `node`, parser bundled in).
+
 ## Test
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v      # Python unit + e2e suite
+python3 tests/conformance/run.py              # contract suite, all 3 impls
+cd go && go test ./...                        # Go native tests
 ```
 
-29 tests: every matcher, transcript parsing, and end-to-end subprocess runs
-that assert the real hook output contract.
+29 Python tests (every matcher, transcript parsing, end-to-end subprocess runs)
+plus 29 conformance vectors asserted identically against Python, Go, and TS.
 
 ## License
 
