@@ -59,7 +59,9 @@ export function parseLine(line: string): Entry | null {
     action: action as Action,
     on,
     group: classify(reason),
-    reason,
+    // A blocked command can drag control chars (tabs, CRs, ANSI escapes)
+    // into the reason; any of them shreds the row layout. One line, plain.
+    reason: reason.replace(/[\x00-\x1f\x7f]+/g, " "),
     raw: line,
   };
 }

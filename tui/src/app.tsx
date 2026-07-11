@@ -23,8 +23,10 @@ function shortTs(iso: string): string {
 }
 
 function Row({ e }: { e: Entry }) {
+  // One terminal row per entry, always: the parent Text truncates the whole
+  // composed line instead of letting a long reason wrap and shred the columns.
   return (
-    <Box>
+    <Text wrap="truncate-end">
       <Text dimColor>{shortTs(e.ts)} </Text>
       <Text color={e.action === "BLOCK" ? "red" : "yellow"} bold>
         {e.action.padEnd(5)}
@@ -32,7 +34,7 @@ function Row({ e }: { e: Entry }) {
       <Text color="cyan"> {e.on.padEnd(7)}</Text>
       <Text dimColor> {e.group.padEnd(15)}</Text>
       <Text> {e.reason}</Text>
-    </Box>
+    </Text>
   );
 }
 
@@ -188,13 +190,13 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      <Box>
+      <Text wrap="truncate-end">
         <Text bold color="cyan">
           compass-tui
         </Text>
         <Text dimColor> — watching {logPath}</Text>
-      </Box>
-      <Box>
+      </Text>
+      <Text wrap="truncate-end">
         <Text color="red" bold>
           BLOCK {counts.block}
         </Text>
@@ -209,7 +211,7 @@ export function App({
             .map((g) => `${g} ${counts.byGroup.get(g)}`)
             .join(" · ") || "no firings"}
         </Text>
-      </Box>
+      </Text>
       <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
       {filtered.length === 0 ? (
         <Box paddingY={1}>

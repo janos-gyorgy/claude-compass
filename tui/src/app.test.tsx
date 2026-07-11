@@ -42,6 +42,31 @@ test("renders counts, colours rows, and picks up live appends", async () => {
   }
 });
 
+test("a long reason stays on one row instead of wrapping into the columns", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ctui-wrap-"));
+  const p = path.join(dir, "w.log");
+  const longCmd = "cd ~/git && python3 - << PYEOF import re p = x ".repeat(8);
+  fs.writeFileSync(
+    p,
+    `[2026-07-11T14:19:41] BLOCK on=pretool  destructive rm blocked → ${longCmd}\n` +
+      "[2026-07-11T14:20:00] WARN  on=stop  flattery phrase(s): ok\n",
+  );
+  const { lastFrame, unmount } = render(<App logPath={p} />);
+  try {
+    await sleep(50);
+    const lines = (lastFrame() ?? "").split("\n");
+    // exactly one line carries each entry's timestamp — no spill-over rows
+    assert.equal(lines.filter((l) => l.includes("14:19:41")).length, 1);
+    assert.equal(lines.filter((l) => l.includes("14:20:00")).length, 1);
+    // the long entry's line is truncated, not wrapped: no line consists of
+    // reason-continuation without a leading timestamp column
+    const cont = lines.filter((l) => l.includes("PYEOF") && !l.includes("14:19:41"));
+    assert.equal(cont.length, 0);
+  } finally {
+    unmount();
+  }
+});
+
 test("empty state explains itself", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ctui-empty-"));
   const { lastFrame, unmount } = render(
