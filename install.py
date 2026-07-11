@@ -59,6 +59,13 @@ def install(settings_path: Path, uninstall: bool = False) -> None:
 
     for event, matcher in (("PreToolUse", "*"), ("Stop", None)):
         group_list = hooks.setdefault(event, [])
+        if not uninstall and _has_compass(group_list):
+            # A compass entry already exists — leave it exactly as the user
+            # wired it. Re-registering here used to clobber customizations
+            # (e.g. a COMPASS_CONFIG=... prefix), which once silently
+            # disarmed a hardened install. Idempotent means hands off.
+            print(f"  {event}: compass entry already present — left untouched.")
+            continue
         group_list[:] = _strip_compass(group_list)  # always clean first
         if not uninstall:
             grp = {"hooks": [_entry()]}
