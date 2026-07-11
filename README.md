@@ -189,16 +189,45 @@ are untouchable by construction. Saves are atomic (temp + rename) and keep a
 `.bak` of the previous version. The hook re-reads the config per tool call, so
 a toggle takes effect on the very next one.
 
+## Running under Kimchi
+
+[Kimchi](https://github.com/getkimchi/kimchi) ships a Claude Code hook
+compatibility adapter (their PR #504) that runs `settings.json` hooks — so
+compass protects Kimchi sessions **unmodified**. Verified live: `rm -rf` and
+protected-branch pushes (including `HEAD:main` refspecs through Kimchi's
+`rtk` wrapper) get denied mid-session, same as under Claude Code.
+
+```bash
+kimchi resources enable extensions.claude-code-hook-adapter
+python3 install.py          # if not already installed
+mkdir -p <your-project>/.claude
+```
+
+Three gotchas that cost us an evening, so you don't pay them again:
+
+- **The adapter discovers hooks only if the project dir contains `.claude/`**
+  — even user-level `~/.claude/settings.json` hooks are skipped without it.
+- **Extensions load at session start only.** Enabling the adapter (or
+  creating `.claude/`) mid-session does nothing; fully restart Kimchi.
+- **Stop-time groups don't carry over.** The adapter sends
+  `transcript_path: null`, so `sycophancy` / `scope_drift` / `self_report`
+  silently no-op (fail-open, by design). What you get is the PreToolUse
+  half — `dangerous_tools` and `git_safety` — which is the mechanical-deny
+  half that matters.
+
+Hook commands run via `sh -c`, so an env-prefixed command like
+`COMPASS_CONFIG=... python3 .../claude_compass.py` works as-is.
+
 ## Test
 
 ```bash
 python3 -m unittest discover -s tests -v      # Python unit + e2e suite
-python3 tests/conformance/run.py              # contract suite, all 3 impls
+python3 tests/conformance/run.py              # contract suite, both impls
 cd go && go test ./...                        # Go native tests
 ```
 
-29 Python tests (every matcher, transcript parsing, end-to-end subprocess runs)
-plus 29 conformance vectors asserted identically against Python and Go.
+32 Python tests (every matcher, transcript parsing, end-to-end subprocess runs)
+plus 32 conformance vectors asserted identically against Python and Go.
 
 ## License
 
