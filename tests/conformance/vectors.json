@@ -1,5 +1,5 @@
 {
-  "_comment": "Language-agnostic conformance vectors for the compass hook contract. Each implementation (Python, Go, TypeScript) is run as a real subprocess: event JSON on stdin, decision JSON on stdout, exit 0 always. 'expect.kind': deny (PreToolUse permission deny) | warn (systemMessage, no decision) | block (Stop decision:block) | silent (no output). 'transcript' entries are materialized to a temp JSONL file and its path injected as transcript_path. 'delayed' appends a line mid-run to reproduce Claude Code flushing the final turn after Stop fires.",
+  "_comment": "Language-agnostic conformance vectors for the compass hook contract. Each implementation (Python, Go) is run as a real subprocess: event JSON on stdin, decision JSON on stdout, exit 0 always. 'expect.kind': deny (PreToolUse permission deny) | warn (systemMessage, no decision) | block (Stop decision:block) | silent (no output). 'transcript' entries are materialized to a temp JSONL file and its path injected as transcript_path. 'delayed' appends a line mid-run to reproduce Claude Code flushing the final turn after Stop fires.",
   "vectors": [
     {
       "name": "deny-rm-rf",

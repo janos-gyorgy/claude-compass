@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 IMPLS = {
     "python": [sys.executable, str(ROOT / "claude_compass.py")],
     "go": [str(ROOT / "go" / "compass")],
-    "node (ts)": ["node", str(ROOT / "ts" / "dist" / "compass.mjs")],
 }
 
 

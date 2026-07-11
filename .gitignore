@@ -3,6 +3,5 @@ __pycache__/
 *.bak
 .DS_Store
 go/compass
-ts/node_modules/
 tui/node_modules/
 tui/dist/

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Conformance runner: one contract, three implementations.
+"""Conformance runner: one contract, every implementation.
 
 Drives every implementation of the compass hook as a real subprocess over the
 shared vectors in vectors.json — event JSON on stdin, decision JSON on stdout,
 exit 0 always — and asserts all of them make the same decision. This is the
-suite that makes the ports *ports* rather than three tools that drift apart.
+suite that makes the Go port a *port* rather than a tool that drifts apart.
 
 Usage:
     python3 tests/conformance/run.py            # run all available impls
-    python3 tests/conformance/run.py --impl go  # just one (py|go|ts)
+    python3 tests/conformance/run.py --impl go  # just one (py|go)
 """
 import argparse
 import json
@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parents[2]
 IMPLS = {
     "py": [sys.executable, str(ROOT / "claude_compass.py")],
     "go": [str(ROOT / "go" / "compass")],
-    "ts": ["node", str(ROOT / "ts" / "dist" / "compass.mjs")],
 }
 
 
@@ -102,8 +101,7 @@ def main() -> int:
     for name in names:
         cmd = IMPLS[name]
         if not Path(cmd[-1]).exists():
-            hint = "cd go && go build -o compass ." if name == "go" else "cd ts && npm i && npm run build"
-            print(f"-- {name}: SKIP (binary missing; build with: {hint})")
+            print(f"-- {name}: SKIP (binary missing; build with: cd go && go build -o compass .)")
             continue
         bad = []
         for vec in vectors:
