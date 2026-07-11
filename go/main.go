@@ -309,7 +309,9 @@ func checkGit(cmd string, g map[string]any) string {
 			quoted[i] = regexp.QuoteMeta(b)
 		}
 		if len(quoted) > 0 {
-			re, err := regexp.Compile(`git push\s+\S+\s+(?:` + strings.Join(quoted, "|") + `)\b`)
+			// flags between `push` and the branch must not evade; catch
+			// refspec pushes (`HEAD:main`) too — mirrors the Python impl.
+			re, err := regexp.Compile(`git push(?:\s+\S+)*?\s+(?:\S*:)?(?:` + strings.Join(quoted, "|") + `)\b`)
 			if err == nil && re.MatchString(cmd) {
 				return "push to protected branch blocked → " + truncate(cmd, 120)
 			}

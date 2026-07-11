@@ -168,7 +168,10 @@ def check_git(cmd: str, g: dict) -> str:
     if g.get("push_to_protected", True):
         protected = g.get("protected_branches", ["main", "master"]) or []
         branch_alt = "|".join(re.escape(b) for b in protected)
-        if branch_alt and re.search(rf"git push\s+\S+\s+(?:{branch_alt})\b", cmd):
+        # any number of flags/tokens may sit between `push` and the branch
+        # (`git push -q origin main` must not evade); also catch refspec
+        # pushes like `git push origin HEAD:main`.
+        if branch_alt and re.search(rf"git push(?:\s+\S+)*?\s+(?:\S*:)?(?:{branch_alt})\b", cmd):
             return f"push to protected branch blocked → {cmd.strip()[:120]}"
     return ""
 
