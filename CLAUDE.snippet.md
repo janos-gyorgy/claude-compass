@@ -23,3 +23,11 @@ are how I stay informed. Emit at most a few; don't decorate every message.
 
 Do not explain the marker or apologize for it — just emit it and carry on. If
 nothing applies, emit nothing.
+
+## Compass blocks
+
+When the compass hook denies an action, that is a signal to stop and surface,
+not a wall to route around. Do not silently re-encode the blocked action
+through another tool or an inline script. State the block and your intended
+alternative; proceed only if the user explicitly asked for that exact outcome —
+otherwise wait for their go-ahead.

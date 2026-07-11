@@ -21,7 +21,10 @@ curl_pipe_shell    = true     # curl|sh, wget|bash
 chmod_777          = true     # chmod 777 / -R 777
 secret_file_edits  = true     # Edit/Write to the secret globs below
 secret_path_globs  = ["*.env", ".env*", "*.pem", "id_rsa*", "id_ed25519*", "**/secrets/**", "*.kube/config", "credentials"]
-extra_command_patterns = []   # your own regexes, matched against any Bash command
+# your own regexes, matched against any Bash command. The two below close the
+# most common re-encodings of a blocked rm: python tree-delete and find -delete
+# (an agent WILL reach for these when the rm pattern denies it — observed live).
+extra_command_patterns = ['shutil\.rmtree', 'find\s[^|;&]*-delete\b']
 
 
 # ── PreToolUse: git safety rails ────────────────────────────────────────────

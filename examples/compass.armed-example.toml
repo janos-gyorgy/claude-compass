@@ -13,7 +13,8 @@ curl_pipe_shell   = true
 chmod_777         = true
 secret_file_edits = true
 secret_path_globs = ["*.env", ".env*", "*.pem", "id_rsa*", "**/secrets/**"]
-extra_command_patterns = ["\\bgit\\s+reset\\s+--hard\\b"]   # example: guard hard resets too
+# rm re-encodings (shutil, find -delete) + example: guard hard resets too
+extra_command_patterns = ['shutil\.rmtree', 'find\s[^|;&]*-delete\b', '\bgit\s+reset\s+--hard\b']
 
 [git_safety]
 enabled = true

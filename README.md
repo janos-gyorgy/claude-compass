@@ -121,7 +121,12 @@ the enabled rules, and emits the Claude Code hook output contract:
 - **Pattern-based, so evadable and imperfect.** A determined model could phrase
   around the flattery patterns; an exotic destructive command could dodge the
   regexes. This raises the floor on the *common* cases; it is not a security
-  boundary against an adversary.
+  boundary against an adversary. Observed live: an agent whose `rm -rf` was
+  denied immediately re-encoded it as a Python `shutil.rmtree` one-liner. The
+  shipped `extra_command_patterns` now catch that family (and `find -delete`),
+  and [`CLAUDE.snippet.md`](CLAUDE.snippet.md) adds the behavioural half — a
+  block means *stop and surface*, not re-encode. True containment needs a
+  sandbox or allowlist; this is a floor, not a wall.
 - **`git_safety` reads the command, not repo state.** It reliably catches
   `git push … main` and `--force`; it can't know your current branch, so
   "block any commit while on main" isn't in this version.
