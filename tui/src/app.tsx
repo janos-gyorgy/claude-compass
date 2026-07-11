@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { Group, parseGroups, saveConfig, setValue } from "./config.js";
 import { Entry, parseLine } from "./parse.js";
 import { tailFile } from "./tail.js";
 
 type Filter = "all" | "block" | "warn";
+type Mode = "monitor" | "config";
 
 const GROUP_ORDER = [
   "dangerous_tools",
@@ -33,7 +36,30 @@ function Row({ e }: { e: Entry }) {
   );
 }
 
-export function App({ logPath }: { logPath: string }) {
+function ConfigRow({ g, selected }: { g: Group; selected: boolean }) {
+  return (
+    <Box>
+      <Text color={selected ? "cyan" : undefined} bold={selected}>
+        {selected ? "❯ " : "  "}
+        {g.name.padEnd(17)}
+      </Text>
+      <Text color={g.enabled ? "green" : undefined} dimColor={!g.enabled} bold>
+        {(g.enabled ? "on" : "off").padEnd(5)}
+      </Text>
+      {g.action && (
+        <Text color={g.action === "block" ? "red" : "yellow"}>{g.action}</Text>
+      )}
+    </Box>
+  );
+}
+
+export function App({
+  logPath,
+  confPath,
+}: {
+  logPath: string;
+  confPath?: string;
+}) {
   const { exit } = useApp();
   const { isRawModeSupported } = useStdin();
   const { stdout } = useStdout();
@@ -41,6 +67,34 @@ export function App({ logPath }: { logPath: string }) {
   const [sinceLaunch, setSinceLaunch] = useState(0);
   const [filter, setFilter] = useState<Filter>("all");
   const [scroll, setScroll] = useState(0); // 0 = pinned to newest
+  const [mode, setMode] = useState<Mode>("monitor");
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [cursor, setCursor] = useState(0);
+  const [confMsg, setConfMsg] = useState("");
+
+  // Read fresh from disk each time so we never clobber an outside edit.
+  const loadConfig = () => {
+    try {
+      setGroups(parseGroups(fs.readFileSync(confPath!, "utf8")));
+      return true;
+    } catch (err) {
+      setConfMsg(`cannot read ${confPath}: ${(err as Error).message}`);
+      return false;
+    }
+  };
+
+  const editConfig = (key: "enabled" | "action", value: string) => {
+    const g = groups[cursor];
+    if (!g || (key === "action" && g.actionLine < 0)) return;
+    try {
+      const text = fs.readFileSync(confPath!, "utf8");
+      saveConfig(confPath!, setValue(text, g.name, key, value));
+      setConfMsg(`saved — [${g.name}] ${key} = ${value} (.bak kept)`);
+    } catch (err) {
+      setConfMsg(`NOT saved: ${(err as Error).message}`);
+    }
+    loadConfig();
+  };
 
   useEffect(() => {
     const handle = tailFile(logPath, (lines, initial) => {
@@ -57,7 +111,20 @@ export function App({ logPath }: { logPath: string }) {
   useInput(
     (input, key) => {
       if (input === "q") exit();
-      else if (input === "b") setFilter("block");
+      else if (mode === "config") {
+        if (input === "c" || key.escape) setMode("monitor");
+        else if (key.upArrow) setCursor((i) => Math.max(0, i - 1));
+        else if (key.downArrow)
+          setCursor((i) => Math.min(groups.length - 1, i + 1));
+        else if (input === " " || key.return)
+          editConfig("enabled", groups[cursor]?.enabled ? "false" : "true");
+        else if (input === "b") editConfig("action", "block");
+        else if (input === "w") editConfig("action", "warn");
+        else if (input === "r") loadConfig() && setConfMsg("reloaded");
+      } else if (input === "c" && confPath) {
+        setConfMsg("");
+        if (loadConfig()) setMode("config");
+      } else if (input === "b") setFilter("block");
       else if (input === "w") setFilter("warn");
       else if (input === "a") setFilter("all");
       else if (key.upArrow) setScroll((s) => s + 1);
@@ -91,6 +158,33 @@ export function App({ logPath }: { logPath: string }) {
   const clamped = Math.min(scroll, maxScroll);
   const end = filtered.length - clamped;
   const visible = filtered.slice(Math.max(0, end - rows), end);
+
+  if (mode === "config") {
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text bold color="cyan">
+            compass-tui · config
+          </Text>
+          <Text dimColor> — editing {confPath} (guard reads it live)</Text>
+        </Box>
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+        {groups.map((g, i) => (
+          <ConfigRow key={g.name} g={g} selected={i === cursor} />
+        ))}
+        {confMsg !== "" && (
+          <Text color={confMsg.startsWith("NOT") ? "red" : "green"}>
+            {confMsg}
+          </Text>
+        )}
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+        <Text dimColor>
+          ↑/↓ select · space toggle on/off · b block · w warn · r reload · c
+          back · q quit
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column">
@@ -135,7 +229,8 @@ export function App({ logPath }: { logPath: string }) {
       <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
       <Text dimColor>
         b blocks · w warns · a all · ↑/↓ scroll
-        {clamped > 0 ? ` (${clamped} back)` : ""} · filter: {filter} · q quit
+        {clamped > 0 ? ` (${clamped} back)` : ""} · filter: {filter}
+        {confPath ? " · c config" : ""} · q quit
       </Text>
     </Box>
   );

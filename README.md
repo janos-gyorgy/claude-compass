@@ -164,9 +164,25 @@ rule group, live as they fire.
 cd tui && npm install && npm run build && npm start
 ```
 
-Strictly read-only and out of the hot path: the hook stays a zero-dependency
-single file; the TUI is a separate long-lived process that only reads the log.
-`b`/`w`/`a` filter, arrows scroll, `q` quits. Respects `$COMPASS_LOG`.
+For a one-word launcher, drop a two-line shim on your PATH:
+
+```bash
+printf '#!/usr/bin/env bash\nexec node "%s/tui/dist/cli.js" "$@"\n' "$PWD" \
+  > ~/.local/bin/compass-tui && chmod +x ~/.local/bin/compass-tui
+```
+
+Out of the hot path: the hook stays a zero-dependency single file; the TUI is
+a separate long-lived process. `b`/`w`/`a` filter, arrows scroll, `q` quits.
+Respects `$COMPASS_LOG`.
+
+Press `c` for the **config pane**: toggle rule groups on/off (space) and flip
+their action between block/warn (`b`/`w`) without hand-editing the armed
+`compass.toml` (`$COMPASS_CONFIG`, else `~/.claude/compass.toml`). Edits are
+deliberately line-surgical — only the value token on a group's `enabled` /
+`action` line is ever rewritten, so comments, alignment, and every other key
+are untouchable by construction. Saves are atomic (temp + rename) and keep a
+`.bak` of the previous version. The hook re-reads the config per tool call, so
+a toggle takes effect on the very next one.
 
 ## Test
 
