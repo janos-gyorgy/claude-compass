@@ -5,3 +5,4 @@ __pycache__/
 go/compass
 tui/node_modules/
 tui/dist/
+.kimchi/
