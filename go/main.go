@@ -173,12 +173,26 @@ func act(action, reason, on string) {
 // --------------------------------------------------------------------------
 
 var (
+	// Mirrors Python's `(?<!git\s)\brm\s+…` — `git rm` (staged, reversible) is
+	// exempt. RE2 has no lookbehind, so rmHit re-checks each match's prefix.
 	reRM       = regexp.MustCompile(`\brm\s+(?:-\S*[rf]\S*|--recursive|--force)`)
+	reGitPre   = regexp.MustCompile(`git\s$`)
 	reDisk     = regexp.MustCompile(`\bdd\b[^\n]*\bof=/dev/|\bmkfs\b|>\s*/dev/sd|>\s*/dev/nvme`)
 	reCurlSh   = regexp.MustCompile(`\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|d)?sh\b`)
 	reChmod777 = regexp.MustCompile(`\bchmod\s+(?:-R\s+)?0?777\b`)
 	reForkbomb = regexp.MustCompile(`:\(\)\s*\{\s*:\|:&\s*\}\s*;:`)
 )
+
+// rmHit emulates the fixed-width negative lookbehind (?<!git\s): a destructive
+// rm counts only when the match is not immediately preceded by `git `.
+func rmHit(cmd string) bool {
+	for _, loc := range reRM.FindAllStringIndex(cmd, -1) {
+		if !reGitPre.MatchString(cmd[:loc[0]]) {
+			return true
+		}
+	}
+	return false
+}
 
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
@@ -244,7 +258,7 @@ func fnmatch(name, pat string) bool {
 func checkDangerous(tool string, tinput map[string]any, g map[string]any) string {
 	if tool == "Bash" {
 		cmd, _ := tinput["command"].(string)
-		if getBool(g, "rm_rf", true) && reRM.MatchString(cmd) {
+		if getBool(g, "rm_rf", true) && rmHit(cmd) {
 			return "destructive rm blocked → " + truncate(cmd, 120)
 		}
 		if getBool(g, "disk_destroyers", true) && reDisk.MatchString(cmd) {
@@ -476,6 +490,57 @@ func checkSelfReport(text string, g map[string]any) (string, bool) {
 }
 
 // --------------------------------------------------------------------------
+// custom rules ([[custom_rules]] in compass.toml)
+// --------------------------------------------------------------------------
+
+// customRules returns enabled custom rules for one surface ("pretool"|"stop").
+// A rule with no `enabled` key counts as on — writing the rule is opting in.
+// BurntSushi decodes [[x]] as []map[string]any, but tolerate []any too.
+func customRules(cfg map[string]any, on string) []map[string]any {
+	var raw []map[string]any
+	switch v := cfg["custom_rules"].(type) {
+	case []map[string]any:
+		raw = v
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				raw = append(raw, m)
+			}
+		}
+	}
+	var out []map[string]any
+	for _, r := range raw {
+		if getBool(r, "enabled", true) && getStr(r, "on", "pretool") == on {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// checkCustom returns the reason string when the rule's pattern matches text,
+// else "". Invalid or missing patterns never fire (fail-open).
+func checkCustom(rule map[string]any, text string) string {
+	pat := getStr(rule, "pattern", "")
+	if pat == "" {
+		return ""
+	}
+	re, err := regexp.Compile(pat)
+	if err != nil || !re.MatchString(text) {
+		return ""
+	}
+	// mirror Python's `rule.get("name") or pat`: empty string falls back too
+	name := getStr(rule, "name", "")
+	if name == "" {
+		name = pat
+	}
+	reason := getStr(rule, "reason", "")
+	if reason == "" {
+		reason = "matched /" + pat + "/"
+	}
+	return "custom '" + name + "': " + reason
+}
+
+// --------------------------------------------------------------------------
 // transcript reading (for Stop)
 // --------------------------------------------------------------------------
 
@@ -610,6 +675,18 @@ func handlePretool(ev, cfg map[string]any) {
 		cmd, _ := tinput["command"].(string)
 		if hit := checkGit(cmd, g); hit != "" {
 			act(getStr(g, "action", "block"), hit, "pretool")
+			return
+		}
+	}
+
+	// Custom pretool rules match against Bash commands only (v1).
+	if tool == "Bash" {
+		cmd, _ := tinput["command"].(string)
+		for _, rule := range customRules(cfg, "pretool") {
+			if hit := checkCustom(rule, cmd); hit != "" {
+				act(getStr(rule, "action", "warn"), hit+" → "+truncate(cmd, 100), "pretool")
+				return
+			}
 		}
 	}
 }
@@ -618,7 +695,9 @@ func handleStop(ev, cfg map[string]any) {
 	syc := group(cfg, "sycophancy")
 	drift := group(cfg, "scope_drift")
 	selfrep := group(cfg, "self_report")
-	if !(getBool(syc, "enabled", false) || getBool(drift, "enabled", false) || getBool(selfrep, "enabled", false)) {
+	customStop := customRules(cfg, "stop")
+	if !(getBool(syc, "enabled", false) || getBool(drift, "enabled", false) ||
+		getBool(selfrep, "enabled", false) || len(customStop) > 0) {
 		return
 	}
 	path, _ := ev["transcript_path"].(string)
@@ -654,6 +733,13 @@ func handleStop(ev, cfg map[string]any) {
 	if getBool(drift, "enabled", false) {
 		if hit := checkScopeDrift(text, drift); hit != "" {
 			act(getStr(drift, "action", "warn"), hit, "stop")
+			return
+		}
+	}
+	for _, rule := range customStop {
+		if hit := checkCustom(rule, text); hit != "" {
+			act(getStr(rule, "action", "warn"), hit, "stop")
+			return
 		}
 	}
 }

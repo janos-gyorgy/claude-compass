@@ -119,7 +119,10 @@ def act(action: str, reason: str, *, on: str) -> None:
 # --------------------------------------------------------------------------- #
 # rule checks  (each returns a human reason string on a hit, else "")
 # --------------------------------------------------------------------------- #
-_RM = re.compile(r"\brm\s+(?:-\S*[rf]\S*|--recursive|--force)")
+# `git rm` — staged, reversible removal — is exempt via a fixed-width negative
+# lookbehind. Plain `rm -rf` etc. still blocked. Part of the contract (see the
+# git-rm conformance vectors); the Go port emulates the lookbehind in rmHit.
+_RM = re.compile(r"(?<!git\s)\brm\s+(?:-\S*[rf]\S*|--recursive|--force)")
 _DISK = re.compile(r"\bdd\b[^\n]*\bof=/dev/|\bmkfs\b|>\s*/dev/sd|>\s*/dev/nvme")
 _CURL_SH = re.compile(r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|d)?sh\b")
 _CHMOD777 = re.compile(r"\bchmod\s+(?:-R\s+)?0?777\b")
@@ -279,6 +282,37 @@ def check_self_report(text: str, g: dict):
 
 
 # --------------------------------------------------------------------------- #
+# custom rules ([[custom_rules]] in compass.toml)
+# --------------------------------------------------------------------------- #
+def custom_rules(cfg: dict, on: str) -> list[dict]:
+    """Enabled custom rules for one surface ('pretool' | 'stop'). A rule with
+    no `enabled` key counts as on — writing the rule is opting in."""
+    rules = cfg.get("custom_rules", [])
+    if not isinstance(rules, list):
+        return []
+    return [
+        r for r in rules
+        if isinstance(r, dict) and r.get("enabled", True) and (r.get("on") or "pretool") == on
+    ]
+
+
+def check_custom(rule: dict, text: str) -> str:
+    """Reason string when `rule`'s pattern matches `text`, else ''. Invalid or
+    missing patterns never fire (fail-open)."""
+    pat = str(rule.get("pattern", ""))
+    if not pat:
+        return ""
+    try:
+        if not re.search(pat, text):
+            return ""
+    except re.error:
+        return ""
+    name = str(rule.get("name") or pat)
+    reason = str(rule.get("reason") or f"matched /{pat}/")
+    return f"custom '{name}': {reason}"
+
+
+# --------------------------------------------------------------------------- #
 # transcript reading (for Stop)
 # --------------------------------------------------------------------------- #
 def _block_text(content) -> str:
@@ -418,12 +452,21 @@ def handle_pretool(ev: dict, cfg: dict) -> None:
         if hit:
             return act(g.get("action", "block"), hit, on="pretool")
 
+    # Custom pretool rules match against Bash commands only (v1).
+    if tool == "Bash":
+        cmd = str(tinput.get("command", ""))
+        for rule in custom_rules(cfg, "pretool"):
+            hit = check_custom(rule, cmd)
+            if hit:
+                return act(rule.get("action", "warn"), f"{hit} → {cmd.strip()[:100]}", on="pretool")
+
 
 def handle_stop(ev: dict, cfg: dict) -> None:
     syc = cfg.get("sycophancy", {})
     drift = cfg.get("scope_drift", {})
     selfrep = cfg.get("self_report", {})
-    if not (syc.get("enabled") or drift.get("enabled") or selfrep.get("enabled")):
+    custom_stop = custom_rules(cfg, "stop")
+    if not (syc.get("enabled") or drift.get("enabled") or selfrep.get("enabled") or custom_stop):
         return
     path = ev.get("transcript_path", "")
 
@@ -452,6 +495,10 @@ def handle_stop(ev: dict, cfg: dict) -> None:
         hit = check_scope_drift(text, drift)
         if hit:
             return act(drift.get("action", "warn"), hit, on="stop")
+    for rule in custom_stop:
+        hit = check_custom(rule, text)
+        if hit:
+            return act(rule.get("action", "warn"), hit, on="stop")
 
 
 def main() -> int:

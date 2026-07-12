@@ -45,6 +45,35 @@
    }
   },
   {
+   "name": "git-rm-exempt-allowed",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git rm -r old-dir"
+    }
+   },
+   "config": "[dangerous_tools]\nenabled = true\n",
+   "expect": {
+    "kind": "silent"
+   }
+  },
+  {
+   "name": "rm-alongside-git-rm-still-denied",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git rm -r old-dir && rm -rf /srv/data"
+    }
+   },
+   "config": "[dangerous_tools]\nenabled = true\n",
+   "expect": {
+    "kind": "deny",
+    "contains": "destructive rm"
+   }
+  },
+  {
    "name": "deny-curl-pipe-shell",
    "event": {
     "hook_event_name": "PreToolUse",
@@ -498,6 +527,94 @@
    "config": "[sycophancy]\nenabled = true\naction = \"warn\"\n",
    "expect": {
     "kind": "silent"
+   }
+  },
+  {
+   "name": "custom-pretool-deny",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "kubectl delete ns web-audiobooks"
+    }
+   },
+   "config": "[[custom_rules]]\nname = \"kubectl-delete-namespace\"\non = \"pretool\"\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction = \"block\"\nreason = \"namespace deletes are Tier-1\"\n",
+   "expect": {
+    "kind": "deny",
+    "contains": "custom 'kubectl-delete-namespace': namespace deletes are Tier-1"
+   }
+  },
+  {
+   "name": "custom-pretool-warn-default-action",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "helm uninstall brew-buddy"
+    }
+   },
+   "config": "[[custom_rules]]\nname = \"helm-uninstall\"\non = \"pretool\"\npattern = 'helm\\s+uninstall'\n",
+   "expect": {
+    "kind": "warn",
+    "contains": "custom 'helm-uninstall': matched /helm\\s+uninstall/"
+   }
+  },
+  {
+   "name": "custom-pretool-disabled-silent",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "kubectl delete ns web-audiobooks"
+    }
+   },
+   "config": "[[custom_rules]]\nname = \"kubectl-delete-namespace\"\nenabled = false\non = \"pretool\"\npattern = 'kubectl\\s+delete\\s+ns'\naction = \"block\"\n",
+   "expect": {
+    "kind": "silent"
+   }
+  },
+  {
+   "name": "custom-bad-regex-fails-open",
+   "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "anything at all"
+    }
+   },
+   "config": "[[custom_rules]]\nname = \"broken\"\non = \"pretool\"\npattern = '('\naction = \"block\"\n",
+   "expect": {
+    "kind": "silent"
+   }
+  },
+  {
+   "name": "custom-stop-warn",
+   "event": {
+    "hook_event_name": "Stop"
+   },
+   "transcript": [
+    {"role": "user", "text": "fix the deploy"},
+    {"role": "assistant", "text": "Patched the manifest, it should work now."}
+   ],
+   "config": "[[custom_rules]]\nname = \"should-work-tell\"\non = \"stop\"\npattern = '(?i)\\bshould (now |probably )?work\\b'\naction = \"warn\"\nreason = \"unverified claim\"\n",
+   "expect": {
+    "kind": "warn",
+    "contains": "custom 'should-work-tell': unverified claim"
+   }
+  },
+  {
+   "name": "custom-stop-block",
+   "event": {
+    "hook_event_name": "Stop"
+   },
+   "transcript": [
+    {"role": "user", "text": "fix the deploy"},
+    {"role": "assistant", "text": "Patched the manifest, it should work now."}
+   ],
+   "config": "[[custom_rules]]\nname = \"should-work-tell\"\non = \"stop\"\npattern = '(?i)\\bshould work\\b'\naction = \"block\"\n",
+   "expect": {
+    "kind": "block",
+    "contains": "custom 'should-work-tell'"
    }
   },
   {
