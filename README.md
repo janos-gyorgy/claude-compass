@@ -40,10 +40,28 @@ you edit [`compass.toml`](compass.toml) and flip `enabled = true`.
 | `sycophancy` | Stop | **warn** | flattery phrases, superlative pile-ups, gushing closers — the "prompt begging" |
 | `scope_drift` | Stop | **warn** | unrequested scope-expansion language ("while I was at it… I also refactored") |
 | `self_report` | Stop | **warn** | markers the model emits *about itself* — `<<compass:drift\|scope\|unsure\|assume\|flattery\|risk>>` (see below) |
+| `[[custom_rules]]` | either | per rule | your own named regexes — against Bash commands (`on = "pretool"`) or the model's final reply (`on = "stop"`) |
 
 `action` is per group: `"block"` (hard deny / push-back) or `"warn"` (surfaced to
 you, action proceeds). The shipped defaults are **tiered** — block the dangerous,
 warn on the stylistic.
+
+Custom rules are `[[custom_rules]]` blocks in the same toml — name, pattern,
+surface, action, and the reason you'll see when it fires:
+
+```toml
+[[custom_rules]]
+name    = "kubectl-delete-namespace"
+on      = "pretool"
+pattern = 'kubectl\s+delete\s+(ns|namespace)\b'
+action  = "block"
+reason  = "namespace deletes are Tier-1 — ask first"
+```
+
+An omitted `enabled` counts as **true** — writing a rule is opting in (unlike
+the built-in groups, which ship off). Invalid patterns never fire (fail-open).
+If you run the Go implementation, keep patterns RE2-compatible (no lookbehind /
+backreferences); the Python reference accepts full `re` syntax.
 
 ## Install
 
@@ -52,6 +70,7 @@ git clone https://github.com/janos-gyorgy/claude-compass
 cd claude-compass
 python3 install.py            # wires hooks into ~/.claude/settings.json
 #   --project    install into ./.claude/settings.json instead
+#   --impl go    wire the Go binary instead of the Python script (see below)
 #   --uninstall  remove compass's hook entries (leaves everything else)
 ```
 
@@ -156,7 +175,18 @@ this repo is the long-lived TUI below, not the per-call hook.) Reproduce with
 
 The Python file stays the reference implementation and the default install —
 zero dependencies beats 34 ms for most sessions. If you want the Go binary
-instead: `cd go && go build -o compass .` and point the hook command at it.
+instead:
+
+```bash
+cd go && go build -o compass . && cd ..
+python3 install.py --impl go
+```
+
+The installer pins `COMPASS_CONFIG` on the Go entry (the binary resolves the
+toml next to the *executable*, which is `go/`, not the repo root — without the
+pin a Go install would silently run with every rule off). Switching `--impl`
+replaces the other implementation's entry; re-running with the same one leaves
+your wiring untouched.
 
 ## compass-tui — watch the guard live
 
@@ -188,6 +218,13 @@ deliberately line-surgical — only the value token on a group's `enabled` /
 are untouchable by construction. Saves are atomic (temp + rename) and keep a
 `.bak` of the previous version. The hook re-reads the config per tool call, so
 a toggle takes effect on the very next one.
+
+Custom rules get the same treatment plus authoring: they're listed under the
+groups (toggle/`b`/`w` work per rule), `n` opens a form to add a new rule,
+`e` edits the selected one (name · surface · pattern · action · enabled ·
+reason). New rules are appended as a `[[custom_rules]]` block; edits rewrite
+only the value tokens of the block's own lines. The form sanity-checks the
+regex before saving.
 
 ## Running under Kimchi
 
@@ -227,7 +264,7 @@ cd go && go test ./...                        # Go native tests
 ```
 
 32 Python tests (every matcher, transcript parsing, end-to-end subprocess runs)
-plus 32 conformance vectors asserted identically against Python and Go.
+plus 40 conformance vectors asserted identically against Python and Go.
 
 ## License
 

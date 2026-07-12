@@ -41,6 +41,7 @@ const GROUP_PHRASES: [string, string][] = [
   ["gushing closer", "sycophancy"],
   ["unrequested scope-expansion language", "scope_drift"],
   ["self-flagged:", "self_report"],
+  ["custom '", "custom_rules"],
 ];
 
 export function classify(reason: string): string {

@@ -1,12 +1,22 @@
 import fs from "node:fs";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
-import { Group, parseGroups, saveConfig, setValue } from "./config.js";
+import {
+  Action,
+  CustomRule,
+  Group,
+  emptyRule,
+  parseCustomRules,
+  parseGroups,
+  saveConfig,
+  setValue,
+  upsertRule,
+} from "./config.js";
 import { Entry, parseLine } from "./parse.js";
 import { tailFile } from "./tail.js";
 
 type Filter = "all" | "block" | "warn";
-type Mode = "monitor" | "config";
+type Mode = "monitor" | "config" | "form";
 
 const GROUP_ORDER = [
   "dangerous_tools",
@@ -14,7 +24,19 @@ const GROUP_ORDER = [
   "sycophancy",
   "scope_drift",
   "self_report",
+  "custom_rules",
   "other",
+];
+
+// The add/edit form for a [[custom_rules]] block, in display order.
+type FieldKey = "name" | "on" | "pattern" | "action" | "enabled" | "reason";
+const FORM_FIELDS: { key: FieldKey; kind: "text" | "toggle"; options?: string[] }[] = [
+  { key: "name", kind: "text" },
+  { key: "on", kind: "toggle", options: ["pretool", "stop"] },
+  { key: "pattern", kind: "text" },
+  { key: "action", kind: "toggle", options: ["warn", "block"] },
+  { key: "enabled", kind: "toggle", options: ["true", "false"] },
+  { key: "reason", kind: "text" },
 ];
 
 function shortTs(iso: string): string {
@@ -55,6 +77,25 @@ function ConfigRow({ g, selected }: { g: Group; selected: boolean }) {
   );
 }
 
+function RuleRow({ r, selected }: { r: CustomRule; selected: boolean }) {
+  return (
+    <Text wrap="truncate-end">
+      <Text color={selected ? "cyan" : undefined} bold={selected}>
+        {selected ? "❯ " : "  "}
+        {(r.name || "(unnamed)").padEnd(17)}
+      </Text>
+      <Text color={r.enabled ? "green" : undefined} dimColor={!r.enabled} bold>
+        {(r.enabled ? "on" : "off").padEnd(5)}
+      </Text>
+      <Text color={r.action === "block" ? "red" : "yellow"}>
+        {r.action.padEnd(6)}
+      </Text>
+      <Text color="cyan">{r.on.padEnd(8)}</Text>
+      <Text dimColor>/{r.pattern}/</Text>
+    </Text>
+  );
+}
+
 export function App({
   logPath,
   confPath,
@@ -71,13 +112,21 @@ export function App({
   const [scroll, setScroll] = useState(0); // 0 = pinned to newest
   const [mode, setMode] = useState<Mode>("monitor");
   const [groups, setGroups] = useState<Group[]>([]);
+  const [rules, setRules] = useState<CustomRule[]>([]);
   const [cursor, setCursor] = useState(0);
   const [confMsg, setConfMsg] = useState("");
+  // form state: which rule is being edited (null = new), draft values, field cursor
+  const [formIndex, setFormIndex] = useState<number | null>(null);
+  const [draft, setDraft] = useState<CustomRule>(emptyRule(-1));
+  const [field, setField] = useState(0);
+  const [formMsg, setFormMsg] = useState("");
 
   // Read fresh from disk each time so we never clobber an outside edit.
   const loadConfig = () => {
     try {
-      setGroups(parseGroups(fs.readFileSync(confPath!, "utf8")));
+      const text = fs.readFileSync(confPath!, "utf8");
+      setGroups(parseGroups(text));
+      setRules(parseCustomRules(text));
       return true;
     } catch (err) {
       setConfMsg(`cannot read ${confPath}: ${(err as Error).message}`);
@@ -86,16 +135,84 @@ export function App({
   };
 
   const editConfig = (key: "enabled" | "action", value: string) => {
-    const g = groups[cursor];
-    if (!g || (key === "action" && g.actionLine < 0)) return;
     try {
       const text = fs.readFileSync(confPath!, "utf8");
-      saveConfig(confPath!, setValue(text, g.name, key, value));
-      setConfMsg(`saved — [${g.name}] ${key} = ${value} (.bak kept)`);
+      if (cursor < groups.length) {
+        const g = groups[cursor];
+        if (!g || (key === "action" && g.actionLine < 0)) return;
+        saveConfig(confPath!, setValue(text, g.name, key, value));
+        setConfMsg(`saved — [${g.name}] ${key} = ${value} (.bak kept)`);
+      } else {
+        const idx = cursor - groups.length;
+        const r = rules[idx];
+        if (!r) return;
+        const next = { ...r, [key]: key === "enabled" ? value === "true" : value };
+        saveConfig(confPath!, upsertRule(text, idx, next as CustomRule));
+        setConfMsg(`saved — rule '${r.name}' ${key} = ${value} (.bak kept)`);
+      }
     } catch (err) {
       setConfMsg(`NOT saved: ${(err as Error).message}`);
     }
     loadConfig();
+  };
+
+  const openForm = (idx: number | null) => {
+    setFormIndex(idx);
+    setDraft(idx === null ? emptyRule(-1) : { ...rules[idx] });
+    setField(0);
+    setFormMsg("");
+    setMode("form");
+  };
+
+  const submitForm = () => {
+    if (!draft.name.trim()) return setFormMsg("name must not be empty");
+    if (!draft.pattern) return setFormMsg("pattern must not be empty");
+    try {
+      new RegExp(draft.pattern); // JS-flavored sanity check only
+    } catch (err) {
+      return setFormMsg(`pattern does not compile: ${(err as Error).message}`);
+    }
+    try {
+      const text = fs.readFileSync(confPath!, "utf8");
+      saveConfig(confPath!, upsertRule(text, formIndex, draft));
+      setConfMsg(
+        `saved — rule '${draft.name}' ${formIndex === null ? "added" : "updated"} (.bak kept)`,
+      );
+    } catch (err) {
+      return setFormMsg(`NOT saved: ${(err as Error).message}`);
+    }
+    loadConfig();
+    setMode("config");
+  };
+
+  const formInput = (input: string, key: any) => {
+    if (key.escape) return setMode("config");
+    if (key.return) return submitForm();
+    if (key.upArrow || (key.tab && key.shift)) {
+      return setField((f) => (f - 1 + FORM_FIELDS.length) % FORM_FIELDS.length);
+    }
+    if (key.downArrow || key.tab) {
+      return setField((f) => (f + 1) % FORM_FIELDS.length);
+    }
+    const fd = FORM_FIELDS[field];
+    if (fd.kind === "toggle") {
+      if (input === " " || key.leftArrow || key.rightArrow) {
+        setDraft((d) => {
+          const opts = fd.options!;
+          const cur = String(d[fd.key]);
+          const next = opts[(opts.indexOf(cur) + 1) % opts.length];
+          return { ...d, [fd.key]: fd.key === "enabled" ? next === "true" : next };
+        });
+      }
+      return;
+    }
+    if (key.backspace || key.delete) {
+      setDraft((d) => ({ ...d, [fd.key]: String(d[fd.key]).slice(0, -1) }));
+      return;
+    }
+    if (input && !key.ctrl && !key.meta) {
+      setDraft((d) => ({ ...d, [fd.key]: String(d[fd.key]) + input }));
+    }
   };
 
   useEffect(() => {
@@ -110,18 +227,29 @@ export function App({
     return () => handle.stop();
   }, [logPath]);
 
+  const rows_total = groups.length + rules.length;
+  const selRule = cursor >= groups.length ? rules[cursor - groups.length] : null;
+
   useInput(
     (input, key) => {
+      if (mode === "form") return formInput(input, key);
       if (input === "q") exit();
       else if (mode === "config") {
         if (input === "c" || key.escape) setMode("monitor");
         else if (key.upArrow) setCursor((i) => Math.max(0, i - 1));
         else if (key.downArrow)
-          setCursor((i) => Math.min(groups.length - 1, i + 1));
+          setCursor((i) => Math.min(rows_total - 1, i + 1));
         else if (input === " " || key.return)
-          editConfig("enabled", groups[cursor]?.enabled ? "false" : "true");
+          editConfig(
+            "enabled",
+            (cursor < groups.length ? groups[cursor]?.enabled : selRule?.enabled)
+              ? "false"
+              : "true",
+          );
         else if (input === "b") editConfig("action", "block");
         else if (input === "w") editConfig("action", "warn");
+        else if (input === "n") openForm(null);
+        else if (input === "e" && selRule) openForm(cursor - groups.length);
         else if (input === "r") loadConfig() && setConfMsg("reloaded");
       } else if (input === "c" && confPath) {
         setConfMsg("");
@@ -161,6 +289,59 @@ export function App({
   const end = filtered.length - clamped;
   const visible = filtered.slice(Math.max(0, end - rows), end);
 
+  if (mode === "form") {
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text bold color="cyan">
+            compass-tui · custom rule{" "}
+            {formIndex === null ? "(new)" : `#${formIndex + 1}`}
+          </Text>
+          <Text dimColor> — writes a [[custom_rules]] block to {confPath}</Text>
+        </Box>
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+        {FORM_FIELDS.map((fd, i) => {
+          const sel = i === field;
+          const val = String(draft[fd.key]);
+          return (
+            <Text key={fd.key} wrap="truncate-end">
+              <Text color={sel ? "cyan" : undefined} bold={sel}>
+                {sel ? "❯ " : "  "}
+                {fd.key.padEnd(9)}
+              </Text>
+              {fd.kind === "toggle" ? (
+                <Text>
+                  {fd.options!.map((o, j) => (
+                    <Text
+                      key={o}
+                      bold={o === val}
+                      color={o === val ? "green" : undefined}
+                      dimColor={o !== val}
+                    >
+                      {j > 0 ? " / " : ""}
+                      {o}
+                    </Text>
+                  ))}
+                </Text>
+              ) : (
+                <Text>
+                  {val}
+                  {sel ? <Text color="cyan">▌</Text> : null}
+                </Text>
+              )}
+            </Text>
+          );
+        })}
+        {formMsg !== "" && <Text color="red">{formMsg}</Text>}
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+        <Text dimColor>
+          ↑/↓/tab field · type/backspace edit · space/←→ toggle · enter save ·
+          esc cancel
+        </Text>
+      </Box>
+    );
+  }
+
   if (mode === "config") {
     return (
       <Box flexDirection="column">
@@ -174,6 +355,14 @@ export function App({
         {groups.map((g, i) => (
           <ConfigRow key={g.name} g={g} selected={i === cursor} />
         ))}
+        {rules.length > 0 && <Text dimColor>  — custom rules —</Text>}
+        {rules.map((r, i) => (
+          <RuleRow
+            key={`${r.headerLine}-${r.name}`}
+            r={r}
+            selected={groups.length + i === cursor}
+          />
+        ))}
         {confMsg !== "" && (
           <Text color={confMsg.startsWith("NOT") ? "red" : "green"}>
             {confMsg}
@@ -181,8 +370,8 @@ export function App({
         )}
         <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
         <Text dimColor>
-          ↑/↓ select · space toggle on/off · b block · w warn · r reload · c
-          back · q quit
+          ↑/↓ select · space toggle on/off · b block · w warn · n new rule
+          {selRule ? " · e edit rule" : ""} · r reload · c back · q quit
         </Text>
       </Box>
     );

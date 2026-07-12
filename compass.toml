@@ -67,3 +67,27 @@ enabled = false
 action  = "warn"
 markers = ["drift", "scope", "unsure", "assume", "flattery", "risk"]
 block_markers = ["risk"]   # these escalate to a hard block even when action="warn"
+
+
+# ── Custom rules: your own regexes, named, with a per-rule action ────────────
+# on = "pretool" matches the pattern against every Bash command before it runs;
+# on = "stop"    matches it against the model's final reply of a turn.
+# An omitted `enabled` counts as true — writing a rule is opting in (the two
+# examples below ship OFF). `reason` is what you'll see when it fires.
+# NOTE: if you run the Go implementation, keep patterns RE2-compatible (no
+# lookbehind / backreferences); the Python reference accepts full `re` syntax.
+[[custom_rules]]
+name    = "kubectl-delete-namespace"
+enabled = false
+on      = "pretool"
+pattern = 'kubectl\s+delete\s+(ns|namespace)\b'
+action  = "block"
+reason  = "namespace deletes are Tier-1 — ask first"
+
+[[custom_rules]]
+name    = "should-work-tell"
+enabled = false
+on      = "stop"
+pattern = '(?i)\bshould (now |probably )?work\b'
+action  = "warn"
+reason  = "'should work' = unverified claim; test it or say it's untested"
