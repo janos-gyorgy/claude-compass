@@ -24,6 +24,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from datetime import datetime
@@ -162,20 +163,100 @@ def check_dangerous(tool: str, tinput: dict, g: dict) -> str:
     return ""
 
 
+# git's global options, the ones that take a SEPARATE value token. These are why
+# substring matching fails: `git -C repo push` and `git -c k=v push --force` are
+# ordinary git, contain no literal "git push", and slipped the check entirely
+# until 2026-09-13.
+_GIT_GLOBAL_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                          "--exec-path", "--super-prefix", "--config-env"}
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+_SEPARATORS = {"&&", "||", ";", "|", "&", "\n"}
+
+
+def _push_argv(cmd: str, depth: int = 0) -> list:
+    """Every `git push` in this command line, as the args AFTER the subcommand.
+
+    Reads the command as argv rather than as text, so global options, env
+    prefixes, shell chaining and `sh -c "..."` cannot hide the invocation.
+    Returns a list of arg-lists — one per push found.
+    """
+    if depth > 2:
+        return []
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:          # unbalanced quotes — fall back, never crash
+        toks = cmd.split()
+
+    segments, cur = [], []
+    for t in toks:
+        if t in _SEPARATORS:
+            segments.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    segments.append(cur)
+
+    found = []
+    for seg in segments:
+        i = 0
+        # skip env assignments: FOO=bar git push ...
+        while i < len(seg) and "=" in seg[i] and not seg[i].startswith("-"):
+            i += 1
+        if i >= len(seg):
+            continue
+        binary = os.path.basename(seg[i])
+        # `sh -c "git push ..."` hides the whole thing in one token — look inside
+        if binary in _SHELLS:
+            for j in range(i + 1, len(seg) - 1):
+                if seg[j] == "-c":
+                    found.extend(_push_argv(seg[j + 1], depth + 1))
+            continue
+        if binary != "git":
+            continue
+        i += 1
+        while i < len(seg):                      # step over git's global options
+            t = seg[i]
+            if t in _GIT_GLOBAL_VALUE_OPTS:
+                i += 2
+            elif t.startswith("-"):
+                i += 1
+            else:
+                break
+        if i < len(seg) and seg[i] == "push":
+            found.append(seg[i + 1:])
+    return found
+
+
+def _ref_names(arg: str):
+    """Branch names a push argument can mean: `main`, `HEAD:main`,
+    `refs/heads/main`, `+refs/heads/main:refs/heads/main`."""
+    for part in arg.lstrip("+").split(":"):
+        if part:
+            yield part.rsplit("/", 1)[-1]
+
+
 def check_git(cmd: str, g: dict) -> str:
-    """git push to a protected branch / force-push."""
-    if "git push" not in cmd:
-        return ""
-    if g.get("force_push", True) and re.search(r"--force(?:-with-lease)?\b|\s-f\b", cmd):
-        return f"force-push blocked → {cmd.strip()[:120]}"
-    if g.get("push_to_protected", True):
-        protected = g.get("protected_branches", ["main", "master"]) or []
-        branch_alt = "|".join(re.escape(b) for b in protected)
-        # any number of flags/tokens may sit between `push` and the branch
-        # (`git push -q origin main` must not evade); also catch refspec
-        # pushes like `git push origin HEAD:main`.
-        if branch_alt and re.search(rf"git push(?:\s+\S+)*?\s+(?:\S*:)?(?:{branch_alt})\b", cmd):
-            return f"push to protected branch blocked → {cmd.strip()[:120]}"
+    """git push to a protected branch / force-push.
+
+    Matches on ARGV, not on the command text. The old substring form
+    (`if "git push" not in cmd`) was bypassed by `git -C repo push origin main`
+    and `git -c k=v push --force`, which is a control that reads as enforcing and
+    is not.
+    """
+    for args in _push_argv(cmd):
+        if g.get("force_push", True):
+            if any(a == "-f" or a == "--force" or a.startswith("--force-with-lease")
+                   or (a.startswith("-") and not a.startswith("--") and "f" in a[1:])
+                   for a in args):
+                return f"force-push blocked → {cmd.strip()[:120]}"
+        if g.get("push_to_protected", True):
+            protected = set(g.get("protected_branches", ["main", "master"]) or [])
+            if protected:
+                for a in args:
+                    if a.startswith("-"):
+                        continue
+                    if protected & set(_ref_names(a)):
+                        return f"push to protected branch blocked → {cmd.strip()[:120]}"
     return ""
 
 

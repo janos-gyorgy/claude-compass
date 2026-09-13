@@ -303,31 +303,166 @@ func checkDangerous(tool string, tinput map[string]any, g map[string]any) string
 	return ""
 }
 
-var reForcePush = regexp.MustCompile(`--force(?:-with-lease)?\b|\s-f\b`)
+// git's global options that take a SEPARATE value token. These are why substring
+// matching failed: `git -C repo push` and `git -c k=v push --force` are ordinary
+// git, contain no literal "git push", and walked past the check until 2026-09-13.
+var gitGlobalValueOpts = map[string]bool{
+	"-C": true, "-c": true, "--git-dir": true, "--work-tree": true,
+	"--namespace": true, "--exec-path": true, "--super-prefix": true, "--config-env": true,
+}
 
-// checkGit: git push to a protected branch / force-push.
+var shellBins = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true}
+
+// shellSplit: a minimal POSIX-ish tokenizer — enough to read argv out of a
+// command line. Handles single/double quotes and backslash escapes; on anything
+// it cannot parse it falls back to whitespace splitting rather than failing open.
+func shellSplit(s string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote rune
+	esc, has := false, false
+	for _, r := range s {
+		switch {
+		case esc:
+			cur.WriteRune(r)
+			esc, has = false, true
+		case r == '\\' && quote != '\'':
+			esc = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+			has = true
+		case r == '\'' || r == '"':
+			quote, has = r, true
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			if has {
+				out = append(out, cur.String())
+				cur.Reset()
+				has = false
+			}
+		default:
+			cur.WriteRune(r)
+			has = true
+		}
+	}
+	if quote != 0 {
+		return strings.Fields(s)
+	}
+	if has {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// pushArgv returns the args AFTER the subcommand for every `git push` in the
+// command line. Reads argv rather than text, so global options, env prefixes,
+// shell chaining and `sh -c "..."` cannot hide the invocation.
+func pushArgv(cmd string, depth int) [][]string {
+	if depth > 2 {
+		return nil
+	}
+	var segs [][]string
+	var cur []string
+	for _, t := range shellSplit(cmd) {
+		switch t {
+		case "&&", "||", ";", "|", "&":
+			segs = append(segs, cur)
+			cur = nil
+		default:
+			cur = append(cur, t)
+		}
+	}
+	segs = append(segs, cur)
+
+	var found [][]string
+	for _, seg := range segs {
+		i := 0
+		for i < len(seg) && strings.Contains(seg[i], "=") && !strings.HasPrefix(seg[i], "-") {
+			i++ // env assignments: FOO=bar git push ...
+		}
+		if i >= len(seg) {
+			continue
+		}
+		bin := filepath.Base(seg[i])
+		if shellBins[bin] { // `sh -c "git push ..."` hides it all in one token
+			for j := i + 1; j < len(seg)-1; j++ {
+				if seg[j] == "-c" {
+					found = append(found, pushArgv(seg[j+1], depth+1)...)
+				}
+			}
+			continue
+		}
+		if bin != "git" {
+			continue
+		}
+		i++
+		for i < len(seg) { // step over git's global options
+			t := seg[i]
+			if gitGlobalValueOpts[t] {
+				i += 2
+			} else if strings.HasPrefix(t, "-") {
+				i++
+			} else {
+				break
+			}
+		}
+		if i < len(seg) && seg[i] == "push" {
+			found = append(found, seg[i+1:])
+		}
+	}
+	return found
+}
+
+// refNames: branch names a push argument can mean — `main`, `HEAD:main`,
+// `refs/heads/main`, `+refs/heads/main:refs/heads/main`.
+func refNames(arg string) []string {
+	var out []string
+	for _, part := range strings.Split(strings.TrimPrefix(arg, "+"), ":") {
+		if part == "" {
+			continue
+		}
+		if k := strings.LastIndex(part, "/"); k >= 0 {
+			part = part[k+1:]
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+// checkGit: git push to a protected branch / force-push. Matches on ARGV, not on
+// the command text — the old `strings.Contains(cmd, "git push")` form read as
+// enforcing and was not.
 func checkGit(cmd string, g map[string]any) string {
-	if !strings.Contains(cmd, "git push") {
-		return ""
-	}
-	if getBool(g, "force_push", true) && reForcePush.MatchString(cmd) {
-		return "force-push blocked → " + truncate(cmd, 120)
-	}
-	if getBool(g, "push_to_protected", true) {
-		protected := getStrSlice(g, "protected_branches")
-		if protected == nil {
-			protected = []string{"main", "master"}
+	for _, args := range pushArgv(cmd, 0) {
+		if getBool(g, "force_push", true) {
+			for _, a := range args {
+				if a == "-f" || a == "--force" || strings.HasPrefix(a, "--force-with-lease") ||
+					(strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a[1:], "f")) {
+					return "force-push blocked → " + truncate(cmd, 120)
+				}
+			}
 		}
-		quoted := make([]string, len(protected))
-		for i, b := range protected {
-			quoted[i] = regexp.QuoteMeta(b)
-		}
-		if len(quoted) > 0 {
-			// flags between `push` and the branch must not evade; catch
-			// refspec pushes (`HEAD:main`) too — mirrors the Python impl.
-			re, err := regexp.Compile(`git push(?:\s+\S+)*?\s+(?:\S*:)?(?:` + strings.Join(quoted, "|") + `)\b`)
-			if err == nil && re.MatchString(cmd) {
-				return "push to protected branch blocked → " + truncate(cmd, 120)
+		if getBool(g, "push_to_protected", true) {
+			protected := getStrSlice(g, "protected_branches")
+			if protected == nil {
+				protected = []string{"main", "master"}
+			}
+			set := make(map[string]bool, len(protected))
+			for _, b := range protected {
+				set[b] = true
+			}
+			for _, a := range args {
+				if strings.HasPrefix(a, "-") {
+					continue
+				}
+				for _, n := range refNames(a) {
+					if set[n] {
+						return "push to protected branch blocked → " + truncate(cmd, 120)
+					}
+				}
 			}
 		}
 	}

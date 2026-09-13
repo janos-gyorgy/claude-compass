@@ -64,3 +64,40 @@ func TestCheckSelfReport(t *testing.T) {
 		t.Error("clean text should not flag")
 	}
 }
+
+// Regression, 2026-09-13. checkGit used to begin
+// `if !strings.Contains(cmd, "git push")`, so any form without that literal
+// string walked past a control the README said "reliably catches" pushes to
+// main and --force. Both bypasses below are ordinary, everyday git.
+func TestGitGlobalOptionsDoNotBypass(t *testing.T) {
+	g := map[string]any{}
+	blocked := []string{
+		"git -C /repo push origin main",
+		"git -c user.name=x push --force origin feature",
+		"git --git-dir=/r/.git push origin master",
+		"git -C /repo -c k=v push origin HEAD:main",
+		"cd /tmp && git -C repo push origin main",
+		`sh -c "git push origin main"`,
+		"GIT_AUTHOR_NAME=x git push origin main",
+		"git push origin refs/heads/main",
+		"git push origin +refs/heads/main:refs/heads/main",
+		"git push -f origin anything",
+	}
+	for _, cmd := range blocked {
+		if checkGit(cmd, g) == "" {
+			t.Errorf("bypassed: %q", cmd)
+		}
+	}
+	allowed := []string{
+		"git pushd main",
+		"echo git push origin main",
+		"git push origin my-feature",
+		"grep -r 'git push' .",
+		"git status",
+	}
+	for _, cmd := range allowed {
+		if got := checkGit(cmd, g); got != "" {
+			t.Errorf("false positive on %q: %s", cmd, got)
+		}
+	}
+}

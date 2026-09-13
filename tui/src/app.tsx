@@ -39,6 +39,17 @@ const FORM_FIELDS: { key: FieldKey; kind: "text" | "toggle"; options?: string[] 
   { key: "reason", kind: "text" },
 ];
 
+// One-line explainer shown for whichever field is selected, so you can author a
+// rule without leaving the TUI to read the README.
+const FIELD_HELP: Record<FieldKey, string> = {
+  name: "short label for this rule — shown when it fires",
+  on: "pretool = check a Bash command before it runs · stop = check Claude's reply at end of turn",
+  pattern: "regex (Python re.search). pretool matches the Bash command text; stop matches the reply. e.g. rm -rf\\s+/  or  curl.*\\|\\s*sh",
+  action: "warn = log it and let it through · block = stop it (pretool) / flag the reply (stop)",
+  enabled: "true = active now · false = saved but dormant",
+  reason: "message logged when it fires (optional — defaults to the pattern)",
+};
+
 function shortTs(iso: string): string {
   const t = iso.indexOf("T");
   return t >= 0 ? iso.slice(t + 1) : iso;
@@ -299,6 +310,10 @@ export function App({
           </Text>
           <Text dimColor> — writes a [[custom_rules]] block to {confPath}</Text>
         </Box>
+        <Text dimColor>
+          A rule fires when its regex matches — a Bash command (pretool) or
+          Claude's reply (stop) — and then warns or blocks.
+        </Text>
         <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
         {FORM_FIELDS.map((fd, i) => {
           const sel = i === field;
@@ -334,6 +349,10 @@ export function App({
         })}
         {formMsg !== "" && <Text color="red">{formMsg}</Text>}
         <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 100))}</Text>
+        <Text wrap="truncate-end">
+          <Text color="cyan">{FORM_FIELDS[field].key}</Text>
+          <Text dimColor> · {FIELD_HELP[FORM_FIELDS[field].key]}</Text>
+        </Text>
         <Text dimColor>
           ↑/↓/tab field · type/backspace edit · space/←→ toggle · enter save ·
           esc cancel

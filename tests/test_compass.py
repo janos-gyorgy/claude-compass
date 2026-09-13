@@ -70,6 +70,30 @@ class TestGit(unittest.TestCase):
     def test_non_push_ignored(self):
         self.assertFalse(cc.check_git("git status", self.G))
 
+    def test_git_global_options_do_not_bypass(self):
+        """Regression, 2026-09-13. check_git used to be `if "git push" not in cmd`,
+        so any form that does not contain that literal string walked straight past
+        a control the README said 'reliably catches' pushes to main and --force."""
+        for cmd in (
+            "git -C /repo push origin main",
+            "git -c user.name=x push --force origin feature",
+            "git --git-dir=/r/.git push origin master",
+            "git -C /repo -c k=v push origin HEAD:main",
+            "cd /tmp && git -C repo push origin main",
+            'sh -c "git push origin main"',
+            "GIT_AUTHOR_NAME=x git push origin main",
+            "git push origin refs/heads/main",
+            "git push origin +refs/heads/main:refs/heads/main",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(cc.check_git(cmd, self.G), f"bypassed: {cmd}")
+
+    def test_git_no_false_positives(self):
+        for cmd in ("git pushd main", "echo git push origin main",
+                    "git push origin my-feature", "grep -r 'git push' ."):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(cc.check_git(cmd, self.G), f"false positive: {cmd}")
+
 
 class TestSycophancy(unittest.TestCase):
     G = {"enabled": True, "flag_superlative_pileups": True,
