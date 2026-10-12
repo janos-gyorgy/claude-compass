@@ -338,6 +338,7 @@ _MARKER_MEANING = {
     "risk": "self-flagged: risky / hard-to-reverse action",
     "default": "self-flagged: overriding a default where the default would have worked",
     "taste": "self-flagged: building something that clashes with the product's character (gimmick / costume / flash)",
+    "cost": "self-flagged: about to spend a lot of tokens / context for what it buys",
 }
 _DEFAULT_MARKERS = list(_MARKER_MEANING)
 
