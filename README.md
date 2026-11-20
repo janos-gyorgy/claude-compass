@@ -264,7 +264,8 @@ it can read anything its own user can. So:
 - Open `http://localhost:8377/#token=<token>`. The fragment never reaches the
   server; the page moves it into `sessionStorage`, clears the address bar and
   sends `Authorization: Bearer` on writes. A token in a query string or a
-  cookie is ignored. Five bad tokens in a minute lock writes for a minute.
+  cookie is ignored. Bad tokens are logged, not locked out: the token is too
+  long to guess, and a lockout would let the agent keep you from editing.
 - Nothing from the logs or config is ever written as HTML (`textContent`
   only), and a strict Content-Security-Policy forbids inline script anyway.
   Requests with any `Host` other than `localhost` / `127.0.0.1` / `[::1]` on

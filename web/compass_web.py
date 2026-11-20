@@ -30,8 +30,6 @@ import shutil
 import socket
 import sys
 import threading
-import time
-from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,9 +50,6 @@ MIN_TOKEN = 32
 MAX_EVENTS = 5000
 MAX_NET_TAIL = 200
 MAX_DOMAINS = 100_000
-FAIL_WINDOW = 60.0
-FAIL_LIMIT = 5
-LOCKOUT = 60.0
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -522,9 +517,6 @@ class App:
     def __init__(self, settings: Settings):
         self.s = settings
         self.write_lock = threading.Lock()
-        self.fail_lock = threading.Lock()
-        self.failures: deque[float] = deque()
-        self.locked_until = 0.0
         self.net = NetAggregate(settings.netlog) if settings.netlog else None
 
     # -- audit ---------------------------------------------------------------
@@ -540,23 +532,11 @@ class App:
             pass
 
     # -- auth ----------------------------------------------------------------
-    def locked(self) -> bool:
-        with self.fail_lock:
-            return time.monotonic() < self.locked_until
-
+    # No lockout on bad tokens: the token is >= 32 random characters, so a
+    # lockout adds nothing against guessing, while the agent (same localhost)
+    # could use it to keep the human from editing. Failures are logged only.
     def record_failure(self, why: str) -> None:
-        now = time.monotonic()
-        with self.fail_lock:
-            self.failures.append(now)
-            while self.failures and now - self.failures[0] > FAIL_WINDOW:
-                self.failures.popleft()
-            lock = len(self.failures) >= FAIL_LIMIT
-            if lock:
-                self.locked_until = now + LOCKOUT
-                self.failures.clear()
         self.audit("AUTH", f"write refused: {why}")
-        if lock:
-            self.audit("AUTH", f"{FAIL_LIMIT} bad tokens within a minute; writes locked for {int(LOCKOUT)}s")
 
     def token_ok(self, header: str | None) -> bool:
         if not header or not header.startswith("Bearer ") or self.s.token is None:
@@ -852,8 +832,6 @@ class Handler(BaseHTTPRequestHandler):
         if app.s.token is None:
             app.audit("AUTH", "write refused: page is view-only")
             return self._json(403, {"error": f"view-only: {app.s.token_problem}"})
-        if app.locked():
-            return self._json(429, {"error": "too many bad tokens; try again in a minute"})
         if not app.token_ok(self.headers.get("Authorization")):
             app.record_failure("bad token" if self.headers.get("Authorization") else "no token")
             return self._json(401, {"error": "missing or wrong token"})

@@ -239,11 +239,11 @@ class TestHTTP(ServerCase):
         self.assertEqual(st, 400)
         self.assertNotIn(TOKEN, self.log.read_text())
 
-    def test_rate_limit(self):
+    def test_bad_tokens_never_lock_out_the_right_one(self):
         body = {"group": "git_safety", "enabled": False}
-        codes = [self.req("POST", "/api/group", body, self.auth("y" * 40))[0] for _ in range(6)]
-        self.assertEqual(codes, [401] * 5 + [429])
-        self.assertEqual(self.req("POST", "/api/group", body, self.auth())[0], 429)
+        codes = [self.req("POST", "/api/group", body, self.auth("y" * 40))[0] for _ in range(8)]
+        self.assertEqual(codes, [401] * 8)
+        self.assertEqual(self.req("POST", "/api/group", body, self.auth())[0], 200)
         self.assertIn("AUTH   on=web  write refused: bad token", self.log.read_text())
 
     def test_body_limits_and_content_type(self):
