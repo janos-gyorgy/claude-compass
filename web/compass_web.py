@@ -644,9 +644,19 @@ class App:
         except OSError:
             raise EditError("guard log not writable, so the change could not be recorded; not saved")
         with audit:
-            save_config(self.s.config, after)
-            for c in changes:
-                audit.write(self.audit_line("CONFIG", c))
+            # record first: a change must never be saved without its log line.
+            # If the save then fails, a second line says so.
+            try:
+                audit.write("".join(self.audit_line("CONFIG", c) for c in changes))
+                audit.flush()
+                os.fsync(audit.fileno())
+            except OSError:
+                raise EditError("could not record the change in the guard log; not saved")
+            try:
+                save_config(self.s.config, after)
+            except OSError as e:
+                audit.write(self.audit_line("CONFIG", f"previous change NOT saved: {e.__class__.__name__}"))
+                raise
 
     def set_group(self, body: dict) -> dict:
         group = body.get("group")
