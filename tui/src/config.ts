@@ -91,8 +91,9 @@ export function setValue(
   const after =
     key === "enabled"
       ? before.replace(/(=\s*)(true|false)\b/, `$1${value}`)
-      : before.replace(/(=\s*")(block|warn)(")/, `$1${value}$3`);
-  if (after === before && !before.includes(value)) {
+      : before.replace(/(=\s*)(['"])(block|warn)\2/, (_m, p, q) => p + q + value + q);
+  const rx = key === "enabled" ? /=\s*(true|false)\b/ : /=\s*(['"])(block|warn)\1/;
+  if (!rx.test(before)) {
     throw new Error(`could not rewrite ${key} on line ${lineNo + 1}`);
   }
   lines[lineNo] = after;
@@ -118,9 +119,20 @@ export interface CustomRule {
 export type RuleKey = "name" | "enabled" | "on" | "pattern" | "action" | "reason";
 const RULE_KEYS: RuleKey[] = ["name", "enabled", "on", "pattern", "action", "reason"];
 
-// `key = 'literal'` or `key = "basic"` — lazy close-quote match; good for
-// TUI-authored (always literal-quoted) and typical hand-authored lines.
-const STR_KEY = (k: string) => new RegExp(`^\\s*${k}\\s*=\\s*(['"])(.*?)\\1`);
+// `key = 'literal'` or `key = "basic"` (backslash escapes allowed inside).
+// Shared with web/compass_web.py — tests/conformance/config_vectors.json.
+const STR_TOKEN = `('[^']*'|"(?:[^"\\\\]|\\\\.)*")`;
+const STR_KEY = (k: string) => new RegExp(`^\\s*${k}\\s*=\\s*${STR_TOKEN}`);
+
+/** Value of a TOML string token; basic-string escapes we write are JSON's. */
+function decodeStr(tok: string): string {
+  if (tok.startsWith("'")) return tok.slice(1, -1);
+  try {
+    return JSON.parse(tok);
+  } catch {
+    return tok.slice(1, -1);
+  }
+}
 
 export function emptyRule(headerLine: number): CustomRule {
   return {
@@ -156,7 +168,7 @@ export function parseCustomRules(text: string): CustomRule[] {
     for (const k of ["name", "on", "pattern", "action", "reason"] as const) {
       const m = line.match(STR_KEY(k));
       if (m && current.lines[k] < 0) {
-        (current as any)[k] = m[2];
+        (current as any)[k] = decodeStr(m[1]);
         current.lines[k] = i;
         return;
       }
@@ -212,8 +224,9 @@ export function upsertRule(
     const after =
       k === "enabled"
         ? before.replace(/(=\s*)(true|false)\b/, (_m, p) => p + value)
-        : before.replace(/(=\s*)(['"]).*?\2/, (_m, p) => p + value);
-    if (after === before && !before.includes(value)) {
+        : before.replace(new RegExp(`(=\\s*)${STR_TOKEN}`), (_m, p) => p + value);
+    const rx = k === "enabled" ? /=\s*(true|false)\b/ : new RegExp(`=\\s*${STR_TOKEN}`);
+    if (!rx.test(before)) {
       throw new Error(`could not rewrite ${k} on line ${lineNo + 1}`);
     }
     lines[lineNo] = after;
@@ -222,13 +235,19 @@ export function upsertRule(
   return lines.join("\n");
 }
 
-/** Atomic save: copy the current file to <file>.bak, then temp + rename. */
+/**
+ * Atomic save: copy the current file to <file>.bak, then temp + rename. The
+ * new file keeps the old one's mode: the hook may run as another user, and a
+ * config it can no longer read means every rule silently off.
+ */
 export function saveConfig(file: string, newText: string): void {
+  const mode = fs.statSync(file).mode & 0o7777;
   fs.copyFileSync(file, `${file}.bak`);
   const tmp = path.join(
     path.dirname(file),
     `.${path.basename(file)}.tmp-${process.pid}`,
   );
-  fs.writeFileSync(tmp, newText);
+  fs.writeFileSync(tmp, newText, { mode });
+  fs.chmodSync(tmp, mode); // writeFileSync's mode is filtered by the umask
   fs.renameSync(tmp, file);
 }

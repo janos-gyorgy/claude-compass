@@ -226,6 +226,82 @@ reason). New rules are appended as a `[[custom_rules]]` block; edits rewrite
 only the value tokens of the block's own lines. The form sanity-checks the
 regex before saving.
 
+## compass-web — the same, in a browser
+
+For machines where nobody keeps a terminal open (a WSL box used through the
+desktop app, say), [`web/compass_web.py`](web/compass_web.py) serves the same
+view on `http://localhost:8377/`. Python 3.11+, standard library only, one
+file: no npm, no build step, nothing fetched from the internet.
+
+```bash
+python3 web/compass_web.py            # view-only
+python3 web/compass_web.py --check    # print resolved paths, "editable: yes|no", exit 0/1
+```
+
+Three sections: **Live** (fired rules, newest first, counts per group,
+all/blocks/warns), **Rules** (the TUI's config pane: groups on/off and
+block/warn, custom rules with an add/edit form) and **Network** (only when
+`$COMPASS_NETLOG` is set; see below).
+
+| Setting | Flag | Environment | Default |
+|---|---|---|---|
+| Listen address | `--host` | `COMPASS_WEB_HOST` | `127.0.0.1` |
+| Port | `--port` | `COMPASS_WEB_PORT` | `8377` |
+| Guard log | | `COMPASS_LOG` | `~/.claude/compass-warns.log` |
+| Config | | `COMPASS_CONFIG` | `~/.claude/compass.toml` |
+| Network log | | `COMPASS_NETLOG` | unset: panel hidden |
+| Edit token file | | `COMPASS_WEB_TOKEN_FILE` | unset: view-only |
+
+**Who the page is protected from: the agent itself.** It can reach the port,
+it chooses the text the page shows (a blocked command is logged verbatim), and
+it can read anything its own user can. So:
+
+- Reads are open; **writes need a token** from a file at least 32 characters
+  long, mode `0600`, owned by the server's user (run it as a dedicated user;
+  see [`examples/compass-web.service`](examples/compass-web.service)). A looser
+  mode, a short token or a missing file means view-only. There is no token
+  flag or variable, because command lines are visible to every user.
+- Open `http://localhost:8377/#token=<token>`. The fragment never reaches the
+  server; the page moves it into `sessionStorage`, clears the address bar and
+  sends `Authorization: Bearer` on writes. A token in a query string or a
+  cookie is ignored. Five bad tokens in a minute lock writes for a minute.
+- Nothing from the logs or config is ever written as HTML (`textContent`
+  only), and a strict Content-Security-Policy forbids inline script anyway.
+  Requests with any `Host` other than `localhost` / `127.0.0.1` / `[::1]` on
+  the configured port are refused (DNS rebinding); no CORS headers; writes are
+  `application/json` only, bodies at most 64 KB.
+- Fail safe, not open: a write that can't be checked, verified or recorded is
+  refused. Every accepted change and every refused write goes into the guard
+  log as a `CONFIG` or `AUTH` line, so switching a rule off is itself visible
+  (the TUI shows these too).
+- A new custom rule's pattern must compile in Python **and** avoid what Go's
+  RE2 lacks (lookaround, backreferences, possessive quantifiers), so it fires
+  under either hook.
+- Config writes are the TUI's, byte for byte: both editors are asserted
+  against the same vectors (`tests/conformance/config_vectors.json`). Saves
+  keep the file's mode, so a hook running as another user can still read it.
+
+### Network panel
+
+compass only *reads* this. Whoever sets `$COMPASS_NETLOG` produces it, one
+JSON object per line (`ts` and `domain` required, other keys ignored, bad
+lines skipped):
+
+```json
+{"ts": "2026-11-20T15:04:05", "domain": "registry.npmjs.org", "kind": "dns"}
+```
+
+The page shows each domain with lookups, first and last seen, a filter and a
+live tail. Domains matching a glob in the config are marked *expected*,
+everything else *other*:
+
+```toml
+[network]
+expected = ["api.anthropic.com", "claude.ai", "*.fatchilli.com"]
+```
+
+It reports; it does not block anything.
+
 ## Running under Kimchi
 
 [Kimchi](https://github.com/getkimchi/kimchi) ships a Claude Code hook
@@ -263,8 +339,11 @@ python3 tests/conformance/run.py              # contract suite, both impls
 cd go && go test ./...                        # Go native tests
 ```
 
-32 Python tests (every matcher, transcript parsing, end-to-end subprocess runs)
-plus 40 conformance vectors asserted identically against Python and Go.
+The Python suite covers every matcher, transcript parsing and end-to-end
+subprocess runs, plus `compass-web` (auth, Host check, rate limit, tailing,
+hostile text). 41 conformance vectors are asserted identically against Python
+and Go; the config-editor vectors run against both the TUI (`cd tui && npm
+test`) and the web server.
 
 ## License
 

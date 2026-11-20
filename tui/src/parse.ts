@@ -8,7 +8,10 @@
  * and reason is free text (often contains a → and a truncated command).
  */
 
-export type Action = "BLOCK" | "WARN";
+// CONFIG / AUTH are written by web/compass_web.py: every config change made
+// from the web page, and every refused write, so switching a rule off is
+// itself visible here.
+export type Action = "BLOCK" | "WARN" | "CONFIG" | "AUTH";
 
 export interface Entry {
   ts: string; // ISO timestamp as written
@@ -19,7 +22,7 @@ export interface Entry {
   raw: string;
 }
 
-const LINE = /^\[([^\]]+)\]\s+(BLOCK|WARN)\s+on=(\S+)\s+(.*)$/;
+const LINE = /^\[([^\]]+)\]\s+(BLOCK|WARN|CONFIG|AUTH)\s+on=(\S+)\s+(.*)$/;
 
 /**
  * The hook doesn't log which rule group fired, but every group's reason
@@ -59,7 +62,8 @@ export function parseLine(line: string): Entry | null {
     ts,
     action: action as Action,
     on,
-    group: classify(reason),
+    group:
+      action === "CONFIG" ? "config" : action === "AUTH" ? "auth" : classify(reason),
     // A blocked command can drag control chars (tabs, CRs, ANSI escapes)
     // into the reason; any of them shreds the row layout. One line, plain.
     reason: reason.replace(/[\x00-\x1f\x7f]+/g, " "),

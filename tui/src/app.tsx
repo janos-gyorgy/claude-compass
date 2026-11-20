@@ -18,6 +18,13 @@ import { tailFile } from "./tail.js";
 type Filter = "all" | "block" | "warn";
 type Mode = "monitor" | "config" | "form";
 
+const ACTION_COLOR: Record<string, string> = {
+  BLOCK: "red",
+  WARN: "yellow",
+  CONFIG: "blue",
+  AUTH: "magenta",
+};
+
 const GROUP_ORDER = [
   "dangerous_tools",
   "git_safety",
@@ -61,8 +68,8 @@ function Row({ e }: { e: Entry }) {
   return (
     <Text wrap="truncate-end">
       <Text dimColor>{shortTs(e.ts)} </Text>
-      <Text color={e.action === "BLOCK" ? "red" : "yellow"} bold>
-        {e.action.padEnd(5)}
+      <Text color={ACTION_COLOR[e.action]} bold>
+        {e.action.padEnd(6)}
       </Text>
       <Text color="cyan"> {e.on.padEnd(7)}</Text>
       <Text dimColor> {e.group.padEnd(15)}</Text>
@@ -286,12 +293,14 @@ export function App({
     const byGroup = new Map<string, number>();
     let block = 0;
     let warn = 0;
+    let config = 0;
     for (const e of entries) {
       byGroup.set(e.group, (byGroup.get(e.group) ?? 0) + 1);
       if (e.action === "BLOCK") block++;
-      else warn++;
+      else if (e.action === "WARN") warn++;
+      else config++;
     }
-    return { byGroup, block, warn };
+    return { byGroup, block, warn, config };
   }, [entries]);
 
   const rows = Math.max(5, (stdout?.rows ?? 24) - 7);
@@ -412,6 +421,11 @@ export function App({
         <Text color="yellow" bold>
           WARN {counts.warn}
         </Text>
+        {counts.config > 0 && (
+          <Text color="blue" bold>
+            {" "}CONFIG/AUTH {counts.config}
+          </Text>
+        )}
         <Text dimColor> · since launch: {sinceLaunch}</Text>
         <Text dimColor>
           {" · "}

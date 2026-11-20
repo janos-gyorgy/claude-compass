@@ -1,0 +1,60 @@
+# compass-web as a dedicated, unprivileged user.
+#
+# Why a separate user: the agent compass guards runs as the hook user. It can
+# read that user's files and every process's command line, but not a 0600 file
+# owned by someone else. So the edit token, and write access to the config,
+# belong to this service's user only.
+#
+# Setup (adjust paths; /opt/claude-compass is a checkout of a release tag):
+#   useradd --system --no-create-home --shell /usr/sbin/nologin compass-web
+#   install -d -o compass-web -g compass-web -m 0755 /etc/compass
+#   install -o compass-web -g compass-web -m 0644 compass.toml /etc/compass/compass.toml
+#   (umask 077; head -c 32 /dev/urandom | base64 | tr -d '/+=' > /etc/compass/web-token)
+#   chown compass-web:compass-web /etc/compass/web-token   # mode 0600, or it runs view-only
+#   # the guard log must be appendable by both the hook user and compass-web,
+#   # e.g. a shared group with mode 0664 on the file and 2775 on its directory
+#
+# The hook user keeps COMPASS_CONFIG=/etc/compass/compass.toml and the same
+# COMPASS_LOG: it can read the config but not change it.
+#
+# Verify:  run --check as compass-web with the same three variables set;
+#          it prints "editable: yes" and exits 0 when the setup is right.
+# Edit link: http://localhost:8377/#token=<contents of /etc/compass/web-token>
+
+[Unit]
+Description=compass-web: local page for the claude-compass guard
+After=network.target
+
+[Service]
+Type=simple
+User=compass-web
+Group=compass-web
+Environment=COMPASS_CONFIG=/etc/compass/compass.toml
+Environment=COMPASS_LOG=/var/log/compass/compass-warns.log
+Environment=COMPASS_WEB_TOKEN_FILE=/etc/compass/web-token
+# Environment=COMPASS_NETLOG=/var/log/compass/dns.jsonl
+# Environment=COMPASS_WEB_PORT=8377
+ExecStart=/usr/bin/python3 /opt/claude-compass/web/compass_web.py --host 127.0.0.1
+Restart=on-failure
+RestartSec=2
+# keep the config readable by the hook user after an edit
+UMask=0022
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/compass /var/log/compass
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

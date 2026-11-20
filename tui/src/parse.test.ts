@@ -48,3 +48,18 @@ test("rejects garbage lines instead of guessing", () => {
   assert.equal(parseLine("not a log line"), null);
   assert.equal(parseLine("[ts] NOPE on=x  reason"), null);
 });
+
+test("parses the web page's CONFIG and AUTH lines", () => {
+  const c = parseLine(
+    "[2026-11-20T15:04:05] CONFIG on=web  git_safety.enabled: true -> false",
+  );
+  assert.ok(c);
+  assert.equal(c.action, "CONFIG");
+  assert.equal(c.on, "web");
+  assert.equal(c.group, "config");
+  assert.equal(c.reason, "git_safety.enabled: true -> false");
+  const a = parseLine("[2026-11-20T15:04:09] AUTH   on=web  write refused: bad token");
+  assert.ok(a);
+  assert.equal(a.action, "AUTH");
+  assert.equal(a.group, "auth");
+});

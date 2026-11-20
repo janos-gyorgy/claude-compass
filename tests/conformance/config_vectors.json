@@ -1,0 +1,333 @@
+{
+ "_comment": "Shared vectors for the line-surgical config editor. Asserted against tui/src/config.ts (config.vectors.test.ts) and web/compass_web.py (tests/test_web.py); both must agree byte for byte. 'text' is the config, or '@name' for an entry in fixtures. A vector either parses (op + expect.groups / expect.rules) or applies 'steps' in order ([\"setValue\", group, key, value] or [\"upsertRule\", index|null, rule]) and expects the exact output text or an error.",
+ "fixtures": {
+  "base": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n",
+  "rules": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = false\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nname    = \"should-work-tell\"\non      = \"stop\"\npattern = \"(?i)\\\\bshould work\\\\b\"\naction  = \"warn\"   # trailing comment survives\n"
+ },
+ "vectors": [
+  {
+   "name": "parse-groups",
+   "text": "@base",
+   "op": "parseGroups",
+   "expect": {
+    "groups": [
+     [
+      "dangerous_tools",
+      true,
+      "block"
+     ],
+     [
+      "git_safety",
+      false,
+      "block"
+     ],
+     [
+      "self_report",
+      true,
+      "warn"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "parse-groups-ignores-custom-rule-keys",
+   "text": "@rules",
+   "op": "parseGroups",
+   "expect": {
+    "groups": [
+     [
+      "dangerous_tools",
+      true,
+      "block"
+     ],
+     [
+      "git_safety",
+      false,
+      "block"
+     ],
+     [
+      "self_report",
+      true,
+      "warn"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "parse-custom-rules-literal-and-basic",
+   "text": "@rules",
+   "op": "parseCustomRules",
+   "expect": {
+    "rules": [
+     {
+      "name": "kubectl-delete-namespace",
+      "enabled": false,
+      "on": "pretool",
+      "pattern": "kubectl\\s+delete\\s+(ns|namespace)\\b",
+      "action": "block",
+      "reason": "Tier-1 — ask first"
+     },
+     {
+      "name": "should-work-tell",
+      "enabled": true,
+      "on": "stop",
+      "pattern": "(?i)\\bshould work\\b",
+      "action": "warn",
+      "reason": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "parse-basic-string-escaped-quote",
+   "text": "[[custom_rules]]\nname = \"q\"\npattern = \"x\"\nreason = \"say \\\"hi\\\" \\\\o/\"\n",
+   "op": "parseCustomRules",
+   "expect": {
+    "rules": [
+     {
+      "name": "q",
+      "enabled": true,
+      "on": "pretool",
+      "pattern": "x",
+      "action": "warn",
+      "reason": "say \"hi\" \\o/"
+     }
+    ]
+   }
+  },
+  {
+   "name": "set-enabled-one-line",
+   "text": "@base",
+   "steps": [
+    [
+     "setValue",
+     "git_safety",
+     "enabled",
+     "true"
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = true\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n"
+   }
+  },
+  {
+   "name": "set-action-keeps-alignment-and-comments",
+   "text": "@base",
+   "steps": [
+    [
+     "setValue",
+     "dangerous_tools",
+     "action",
+     "warn"
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"warn\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n"
+   }
+  },
+  {
+   "name": "set-action-single-quoted",
+   "text": "[g]\nenabled = true\naction = 'block'   # note\n",
+   "steps": [
+    [
+     "setValue",
+     "g",
+     "action",
+     "warn"
+    ]
+   ],
+   "expect": {
+    "text": "[g]\nenabled = true\naction = 'warn'   # note\n"
+   }
+  },
+  {
+   "name": "set-absent-group-errors",
+   "text": "@base",
+   "steps": [
+    [
+     "setValue",
+     "nope",
+     "enabled",
+     "true"
+    ]
+   ],
+   "expect": {
+    "error": true
+   }
+  },
+  {
+   "name": "set-absent-action-errors",
+   "text": "[g]\nenabled = true\n",
+   "steps": [
+    [
+     "setValue",
+     "g",
+     "action",
+     "warn"
+    ]
+   ],
+   "expect": {
+    "error": true
+   }
+  },
+  {
+   "name": "set-round-trip-byte-identical",
+   "text": "@base",
+   "steps": [
+    [
+     "setValue",
+     "self_report",
+     "enabled",
+     "false"
+    ],
+    [
+     "setValue",
+     "self_report",
+     "enabled",
+     "true"
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n"
+   }
+  },
+  {
+   "name": "upsert-toggle-enabled-in-place",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     0,
+     {
+      "name": "kubectl-delete-namespace",
+      "enabled": true,
+      "on": "pretool",
+      "pattern": "kubectl\\s+delete\\s+(ns|namespace)\\b",
+      "action": "block",
+      "reason": "Tier-1 — ask first"
+     }
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = true\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nname    = \"should-work-tell\"\non      = \"stop\"\npattern = \"(?i)\\\\bshould work\\\\b\"\naction  = \"warn\"   # trailing comment survives\n"
+   }
+  },
+  {
+   "name": "upsert-inserts-missing-enabled-after-header",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     1,
+     {
+      "name": "should-work-tell",
+      "enabled": false,
+      "on": "stop",
+      "pattern": "(?i)\\bshould work\\b",
+      "action": "warn",
+      "reason": ""
+     }
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = false\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nenabled = false\nname    = 'should-work-tell'\non      = 'stop'\npattern = '(?i)\\bshould work\\b'\naction  = 'warn'   # trailing comment survives\n"
+   }
+  },
+  {
+   "name": "upsert-append-then-edit-dollar-survives",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     null,
+     {
+      "name": "no-prod-kubeconfig",
+      "enabled": true,
+      "on": "stop",
+      "pattern": "KUBECONFIG=\\S*prod\\S*$",
+      "action": "block",
+      "reason": ""
+     }
+    ],
+    [
+     "upsertRule",
+     2,
+     {
+      "name": "no-prod-kubeconfig",
+      "enabled": true,
+      "on": "stop",
+      "pattern": "KUBECONFIG=\\S*prod\\S*$",
+      "action": "warn",
+      "reason": ""
+     }
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = false\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nname    = \"should-work-tell\"\non      = \"stop\"\npattern = \"(?i)\\\\bshould work\\\\b\"\naction  = \"warn\"   # trailing comment survives\n\n[[custom_rules]]\nname    = 'no-prod-kubeconfig'\nenabled = true\non      = 'stop'\npattern = 'KUBECONFIG=\\S*prod\\S*$'\naction  = 'warn'\n"
+   }
+  },
+  {
+   "name": "upsert-single-quote-uses-basic-string",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     null,
+     {
+      "name": "it's",
+      "enabled": true,
+      "on": "pretool",
+      "pattern": "don't\\s+\\d+",
+      "action": "warn",
+      "reason": "say \"no\""
+     }
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = false\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nname    = \"should-work-tell\"\non      = \"stop\"\npattern = \"(?i)\\\\bshould work\\\\b\"\naction  = \"warn\"   # trailing comment survives\n\n[[custom_rules]]\nname    = \"it's\"\nenabled = true\non      = 'pretool'\npattern = \"don't\\\\s+\\\\d+\"\naction  = 'warn'\nreason  = 'say \"no\"'\n"
+   }
+  },
+  {
+   "name": "upsert-edit-basic-string-with-escapes",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     1,
+     {
+      "name": "should-work-tell",
+      "enabled": true,
+      "on": "stop",
+      "pattern": "(?i)\\bit's fine\\b",
+      "action": "warn",
+      "reason": "a"
+     }
+    ]
+   ],
+   "expect": {
+    "text": "# claude-compass — header comment stays put.\n#     action = \"block\"  -> deny (mentions \"warn\" too; must not be edited)\n\n# ── PreToolUse ──────────\n[dangerous_tools]\nenabled = true\naction  = \"block\"\nrm_rf              = true     # rm -rf / -fr\nsecret_path_globs  = [\"*.env\", \"credentials\"]\n\n[git_safety]\nenabled = false\naction  = \"block\"\nforce_push         = true     # --force / -f\n\n[self_report]\nenabled = true\naction  = \"warn\"\nmarkers = [\"drift\", \"risk\"]\nblock_markers = [\"risk\"]   # escalate even when action=\"warn\"\n\n# your own regexes\n[[custom_rules]]\nname    = 'kubectl-delete-namespace'\nenabled = false\non      = 'pretool'\npattern = 'kubectl\\s+delete\\s+(ns|namespace)\\b'\naction  = 'block'\nreason  = 'Tier-1 — ask first'\n\n[[custom_rules]]\nenabled = true\nreason  = 'a'\nname    = 'should-work-tell'\non      = 'stop'\npattern = \"(?i)\\\\bit's fine\\\\b\"\naction  = 'warn'   # trailing comment survives\n"
+   }
+  },
+  {
+   "name": "upsert-missing-index-errors",
+   "text": "@rules",
+   "steps": [
+    [
+     "upsertRule",
+     5,
+     {
+      "name": "x",
+      "enabled": true,
+      "on": "pretool",
+      "pattern": "x",
+      "action": "warn",
+      "reason": ""
+     }
+    ]
+   ],
+   "expect": {
+    "error": true
+   }
+  }
+ ]
+}
